@@ -22,7 +22,7 @@
 ## 一次请求的行动顺序
 
 1. 接收请求。第三阶段由 `parse_help_request` 将自然语言映射为 `category`、`item_type`、`location`、`deadline`、`urgency`，并验证输出；第二阶段由结构化表单提供这些值。必需字段缺失时提出一条针对性澄清问题，保持 `collecting_details`。
-2. 用 `create_help_request` 保存请求。服务层核验当前演示用户、截止时间和字段。创建成功后进入 `searching`。
+2. 用 `create_help_request` 保存请求。服务层核验当前演示用户、截止时间和字段。Milestone 01 创建成功后保持 `draft`；从 Milestone 02 启动匹配时才进入 `searching`。
 3. 调用 `search_helpers` 做物品、可用性、校内范围和时限等硬过滤，再由 `rank_candidates` 按可在截止前交接、建筑位置近远及稳定 ID 做确定性排序；无需实时地图服务。候选集、顺序和资格以数据库及规则为准，模型不能虚构。
 4. 对最合适且尚未联系的候选人调用 `send_help_offer`；站内 Inbox 与数据库记录表示已发送。进入 `awaiting_response`，记录公开事件。服务层保证同一请求与帮助者的重复调用不会重复发 Offer。
 5. `record_helper_response` 记录接受或拒绝；`check_offer_timeout` 处理到期未答。拒绝或超时后，`expand_search` 根据剩余候选人继续搜索并联系下一位；接受后由 `mark_request_matched` 记录匹配与交接信息。
