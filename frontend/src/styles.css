@@ -1,0 +1,23 @@
+:root { font-family: Inter, "Microsoft YaHei", sans-serif; color: #192c30; background: #f2f6f4; font-synthesis: none; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+.shell { width: min(100% - 2rem, 640px); margin: 3.5rem auto; }
+.eyebrow { color: #34766e; font-size: .75rem; font-weight: 800; letter-spacing: .12em; }
+h1 { margin: .6rem 0; font-size: clamp(2rem, 6vw, 3rem); letter-spacing: -.04em; }
+.lead { color: #4d6366; line-height: 1.6; }
+.notice { background: #def1ea; color: #245c4f; padding: .8rem 1rem; border-radius: .8rem; margin: 1.4rem 0; }
+.card { background: white; border: 1px solid #d8e4df; box-shadow: 0 12px 38px #1439310d; border-radius: 1rem; padding: 1.5rem; }
+form { display: grid; gap: .55rem; }
+label { font-weight: 700; margin-top: .75rem; }
+input, select, textarea { width: 100%; padding: .8rem; border: 1px solid #b8cbc4; border-radius: .55rem; font: inherit; background: white; color: inherit; }
+input:focus, select:focus, textarea:focus { outline: 2px solid #3a9480; outline-offset: 1px; }
+button { border: 0; border-radius: .6rem; background: #176b5c; color: white; padding: .9rem 1.2rem; font: inherit; font-weight: 700; cursor: pointer; margin-top: 1rem; }
+button:disabled { opacity: .65; cursor: wait; }
+.error { color: #9d2828; }
+.status { color: #176b5c; font-weight: 800; font-size: 1.15rem; }
+dl { display: grid; grid-template-columns: 8rem 1fr; gap: .8rem; line-height: 1.5; }
+dt { color: #637579; }
+dd { margin: 0; overflow-wrap: anywhere; }
+.subtle { color: #637579; font-size: .9rem; }
+.back { display: inline-block; margin-top: 1.5rem; color: #176b5c; font-weight: 700; }
+@media (max-width: 480px) { .shell { margin: 1.5rem auto; } .card { padding: 1rem; } dl { grid-template-columns: 1fr; gap: .2rem; } dd { margin-bottom: .7rem; } }
