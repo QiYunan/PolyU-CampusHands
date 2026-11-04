@@ -28,8 +28,8 @@
 | `User` | `id`, `display_name`, `campus_building`, `availability_status`, `reliability_score`, `created_at` | 演示身份；`reliability_score` 仅内部使用，不公开排名。 |
 | `UserItem` | `id`, `user_id`, `item_type`, `item_name`, `available` | 帮助者拥有且可借出的物品。 |
 | `HelpRequest` | `id`, `requester_id`, `category`, `raw_text`, `item_type`, `location`, `deadline`, `urgency`, `status`, `created_at`, `updated_at` | 请求、时限和权威状态；第一阶段允许从结构化表单填充。 |
-| `HelpOffer` | `id`, `request_id`, `helper_id`, `status`, `sent_at`, `responded_at`, `expires_at` | 一次站内邀请及其回复或超时。 |
-| `AgentEvent` | `id`, `request_id`, `event_type`, `public_message`, `metadata_json`, `created_at` | 可公开的操作事件；不保存隐藏推理。 |
+| `HelpOffer` | `id`, `request_id`, `helper_id`, `item_id`, `status`, `sent_at`, `responded_at`, `expires_at`, 双方确认时间 | 一次站内邀请、回复或超时及交接确认；同一请求与 Helper 最多一条。 |
+| `AgentEvent` | `id`, `request_id`, `event_type`, `public_message`, `metadata_json`, `dedupe_key`, `created_at` | 可公开且可去重的操作事件；不保存隐藏推理。 |
 
 第一阶段至少持久化演示 `User` 与 `HelpRequest`；其余实体在对应里程碑增加。时间戳与截止时间以 UTC 存储，在界面按本地时间显示。修改请求、Offer 和事件的服务操作应在一致的数据库事务内完成；重复命令不得产生重复 Offer 或重复终态。`metadata_json` 只存非敏感的结构化操作信息。
 
@@ -40,12 +40,14 @@
 | 阶段 | 接口 | 用途 |
 | --- | --- | --- |
 | 01 | `POST /api/requests`, `GET /api/requests/{id}`, `GET /api/system/health` | 创建并重新读取持久化请求；健康检查。 |
-| 02 | `POST /api/requests/{id}/cancel`, `POST /api/requests/{id}/start`, `POST /api/requests/{id}/complete` | 取消、开始交接、Requester 确认交接完成。 |
+| 02 | `POST /api/requests/{id}/search`, `POST /api/requests/{id}/cancel`, `POST /api/requests/{id}/start`, `POST /api/requests/{id}/complete` | 从草稿开始匹配、取消、开始交接、Requester 确认交接完成。 |
 | 02 | `GET /api/helpers/{id}/offers`, `POST /api/offers/{id}/accept`, `POST /api/offers/{id}/decline`, `POST /api/offers/{id}/confirm-completion` | Helper 站内邀请、应答及交接确认。 |
 | 03 | `GET /api/system/llm-status` | 返回当前 provider 类别和可用状态，不返回密钥。 |
 | 04 | `WS /ws/requests/{request_id}` | 推送请求状态及公开事件。 |
 
 `/start` 在已匹配后记录开始交接；`/complete` 记录 Requester 的确认；只有对应 Helper 也确认后，服务层才可进入 `completed`。原始清单缺少开始交接与 Helper 确认接口，因此在此补充。第一阶段请求输入为结构化字段；第三阶段增加自然语言解析入口时保持服务层的请求创建规则一致。具体输入输出 schema 在实现该阶段时确定。
+
+第二阶段的本地 Demo Mode 用 `X-Demo-User-Id` 表示当前虚构角色。原有请求接口缺少该 header 时默认为 Alice；Helper Inbox 和 Offer 操作必须带当前 Helper ID，服务层检查归属。该 header 可由本地用户切换，不是生产级认证。前端每两秒用 HTTP 读取公开状态；服务端以单进程定时检查处理 Offer 超时，并在重启后补处理到期记录。WebSocket 留待第四阶段。
 
 ## 安全边界
 

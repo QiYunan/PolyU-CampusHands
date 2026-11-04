@@ -22,6 +22,8 @@
 
 **AT-08 非法操作。** Given 已完成或已取消的请求，When 再次接受、取消或完成，Then 服务层拒绝非法转换且数据库状态不变；其他演示角色不能操作不属于自己的 Offer。
 
+**AT-08a 匹配后的截止与预留。** Given Carol 已接受且物品被预留，When 请求截止时间到达，Then `matched` 或 `in_progress` 请求不自动过期；When Requester 取消，Then 预留物品重新可用；When 双方完成确认，Then 物品保持不可用。
+
 ## 03 Agent 与模型
 
 **AT-09 解析与澄清。** Given 固定时钟及中文借物输入“我 20 分钟后在 VA 考试，但计算器坏了，想借一部科学计算器”，When Mock provider 解析，Then 得到 `borrow`、`scientific_calculator`、`VA` 和相对固定时钟计算的截止时间；When 地点或截止时间缺失，Then 只提出所缺字段的澄清问题，不向帮助者发送 Offer。

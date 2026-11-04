@@ -1,6 +1,6 @@
 # CampusHands
 
-Milestone 01 provides a local demo loop: Alice creates a structured borrowing request, FastAPI stores it in SQLite as `draft`, and the browser reloads it by ID. Matching, helper offers, LLM providers, and WebSocket updates belong to later milestones.
+Milestone 02 adds a deterministic BorrowLoop flow to the Milestone 01 request form. Alice starts matching from a saved draft; Bob can decline, Carol can accept, and both parties confirm the handoff. All people and items are fictional. LLM providers and WebSocket updates belong to later milestones.
 
 ## Requirements
 
@@ -16,10 +16,12 @@ From the repository root:
 cd backend
 py -3.14 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+$env:DATABASE_URL = "sqlite:///./campushands-demo.db"
+.\.venv\Scripts\python.exe -m app.seed
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
 ```
 
-The backend listens at `http://127.0.0.1:8000`. API documentation is at `http://127.0.0.1:8000/docs`. On first startup it creates `backend/campushands.db` and the local Alice demo user. Restarting does not erase requests. To use another database path, set `DATABASE_URL` to a SQLite URL before starting the backend. Keep the server running while starting the frontend in another terminal.
+The backend listens at `http://127.0.0.1:8000`; OpenAPI documentation is at `http://127.0.0.1:8000/docs`. The explicit seed command adds Alice, Bob, Carol, David, their fictional items, and one draft request without duplicating existing records. Use a new `DATABASE_URL` filename for an independent demo; existing SQLite files are preserved. The app checks offer timeouts while it runs and catches up on restart. Keep the server running while starting the frontend in another terminal.
 
 ## Start the frontend
 
@@ -31,9 +33,9 @@ npm.cmd ci
 npm.cmd run dev
 ```
 
-Open `http://127.0.0.1:5173`. Vite forwards `/api` to the local backend. Enter an item, location, and future deadline; the saved request opens at `/requests/{id}`. Reopen that URL or restart the backend to confirm persistence.
+Open `http://127.0.0.1:5173`. Vite forwards `/api` to the local backend. Create a scientific calculator request at VA with a deadline at least ten minutes away, open its detail page, and click **开始匹配**. Switch Demo Mode to Bob and decline his offer; switch to Carol and accept hers. Return to Alice, start the handoff and confirm it; then switch to Carol to confirm completion. The public timeline is refreshed through HTTP polling. A request remains a `draft` until Alice starts matching. The deadline applies to finding a helper; after a match, the handoff may continue. A cancelled match releases the item, while a completed handoff keeps it unavailable.
 
-## Check Milestone 01
+## Check Milestones 01 and 02
 
 ```powershell
 cd backend
@@ -49,10 +51,10 @@ npm.cmd run lint
 npm.cmd run build
 ```
 
-If the UI reports that it cannot reach the backend, start FastAPI on port 8000. If an old SQLite schema is present from an experimental run, use a fresh database URL; this milestone does not include schema migrations. Do not commit `.env`, database files, or real student data.
+If the UI reports that it cannot reach the backend, start FastAPI on port 8000. If no Helper offers appear, run the seed command against the same `DATABASE_URL` used by the server. The seed command never resets an accepted item; use a fresh database filename to repeat the entire demo. Existing Milestone 01 tables and requests are kept when the new tables are created. Demo role headers are not real authentication. Do not commit `.env`, database files, or real student data.
 
 ## Repository layout
 
-- `backend/`: FastAPI, SQLAlchemy models, SQLite persistence, pytest checks
-- `frontend/`: React, Vite, structured form and request detail page
+- `backend/`: FastAPI, deterministic matching and state services, SQLite persistence, demo seed, pytest checks
+- `frontend/`: React, Vite, Requester and Helper views with HTTP polling
 - `docs/`: product, architecture, workflow, acceptance scenarios, milestones

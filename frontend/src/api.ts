@@ -17,9 +17,37 @@ export type HelpRequest = {
   location: string;
   deadline: string;
   urgency: string | null;
-  status: "draft";
+  status: "draft" | "collecting_details" | "searching" | "awaiting_response" | "matched" | "in_progress" | "completed" | "cancelled" | "expired" | "failed";
   created_at: string;
   updated_at: string;
+  events?: PublicEvent[];
+  matched_helper?: string | null;
+  handoff_location?: string | null;
+  requester_confirmed?: boolean;
+  helper_confirmed?: boolean;
+};
+
+export type PublicEvent = {
+  id: number;
+  event_type: string;
+  public_message: string;
+  created_at: string;
+};
+
+export type HelpOffer = {
+  id: number;
+  request_id: number;
+  helper_id: number;
+  item_type: ItemType;
+  item_name: string;
+  location: string;
+  deadline: string;
+  status: string;
+  request_status: HelpRequest["status"];
+  sent_at: string;
+  expires_at: string;
+  requester_confirmed: boolean;
+  helper_confirmed: boolean;
 };
 
 export type RequestInput = {
@@ -63,4 +91,24 @@ export function createHelpRequest(input: RequestInput): Promise<HelpRequest> {
 
 export function getHelpRequest(id: string): Promise<HelpRequest> {
   return api<HelpRequest>(`/api/requests/${encodeURIComponent(id)}`);
+}
+
+export type RequestAction = "search" | "cancel" | "start" | "complete";
+
+export function actOnRequest(id: string, action: RequestAction): Promise<HelpRequest> {
+  return api<HelpRequest>(`/api/requests/${encodeURIComponent(id)}/${action}`, { method: "POST" });
+}
+
+function helperHeaders(helperId: number): HeadersInit {
+  return { "X-Demo-User-Id": String(helperId) };
+}
+
+export function getHelperOffers(helperId: number): Promise<HelpOffer[]> {
+  return api<HelpOffer[]>(`/api/helpers/${helperId}/offers`, { headers: helperHeaders(helperId) });
+}
+
+export type OfferAction = "accept" | "decline" | "confirm-completion";
+
+export function actOnOffer(offerId: number, helperId: number, action: OfferAction): Promise<HelpOffer> {
+  return api<HelpOffer>(`/api/offers/${offerId}/${action}`, { method: "POST", headers: helperHeaders(helperId) });
 }

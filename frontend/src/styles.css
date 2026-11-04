@@ -20,4 +20,15 @@ dt { color: #637579; }
 dd { margin: 0; overflow-wrap: anywhere; }
 .subtle { color: #637579; font-size: .9rem; }
 .back { display: inline-block; margin-top: 1.5rem; color: #176b5c; font-weight: 700; }
+.demo-bar { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; padding: .6rem max(1rem, calc((100vw - 640px) / 2)); background: #173f38; color: white; }
+.demo-bar strong { white-space: nowrap; }
+.demo-bar label { margin: 0; font-size: .85rem; }
+.demo-bar select { width: auto; min-width: 12rem; padding: .4rem .6rem; color: #192c30; }
+.actions { display: flex; flex-wrap: wrap; gap: .65rem; }
+.secondary { color: #176b5c; background: #deefe9; }
+.timeline, .offer { margin-top: 1rem; }
+.timeline h2 { margin-top: 0; font-size: 1.2rem; }
+.timeline ol { padding-left: 1.2rem; }
+.timeline li { padding: .45rem 0; }
+.timeline time { display: block; color: #637579; font-size: .8rem; margin-top: .15rem; }
 @media (max-width: 480px) { .shell { margin: 1.5rem auto; } .card { padding: 1rem; } dl { grid-template-columns: 1fr; gap: .2rem; } dd { margin-bottom: .7rem; } }
