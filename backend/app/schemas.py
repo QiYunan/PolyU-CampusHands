@@ -5,7 +5,7 @@ from enum import Enum
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.models import HelpRequest
+from app.models import AgentEvent, HelpOffer, HelpRequest
 
 
 class ItemType(str, Enum):
@@ -62,9 +62,14 @@ class RequestRead(BaseModel):
     status: str
     created_at: datetime
     updated_at: datetime
+    events: list["EventRead"] = Field(default_factory=list)
+    matched_helper: str | None = None
+    handoff_location: str | None = None
+    requester_confirmed: bool = False
+    helper_confirmed: bool = False
 
     @classmethod
-    def from_record(cls, record: HelpRequest) -> "RequestRead":
+    def from_record(cls, record: HelpRequest, **extra) -> "RequestRead":
         return cls(
             id=record.id,
             requester_id=record.requester_id,
@@ -77,4 +82,50 @@ class RequestRead(BaseModel):
             status=record.status,
             created_at=as_utc(record.created_at),
             updated_at=as_utc(record.updated_at),
+            **extra,
+        )
+
+
+class EventRead(BaseModel):
+    id: int
+    event_type: str
+    public_message: str
+    created_at: datetime
+
+    @classmethod
+    def from_record(cls, event: AgentEvent) -> "EventRead":
+        return cls(id=event.id, event_type=event.event_type, public_message=event.public_message, created_at=as_utc(event.created_at))
+
+
+class OfferRead(BaseModel):
+    id: int
+    request_id: int
+    helper_id: int
+    item_type: ItemType
+    item_name: str
+    location: str
+    deadline: datetime
+    status: str
+    request_status: str
+    sent_at: datetime
+    expires_at: datetime
+    requester_confirmed: bool
+    helper_confirmed: bool
+
+    @classmethod
+    def from_record(cls, offer: HelpOffer) -> "OfferRead":
+        return cls(
+            id=offer.id,
+            request_id=offer.request_id,
+            helper_id=offer.helper_id,
+            item_type=offer.item.item_type,
+            item_name=offer.item.item_name,
+            location=offer.request.location,
+            deadline=as_utc(offer.request.deadline),
+            status=offer.status,
+            request_status=offer.request.status,
+            sent_at=as_utc(offer.sent_at),
+            expires_at=as_utc(offer.expires_at),
+            requester_confirmed=offer.requester_confirmed_at is not None,
+            helper_confirmed=offer.helper_confirmed_at is not None,
         )

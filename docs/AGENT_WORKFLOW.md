@@ -4,6 +4,8 @@
 
 [第一阶段](milestones/01-mvp-foundation.md)只有结构化表单、API 和数据库闭环，不运行 Agent，也不接入真实 LLM。[第二阶段](milestones/02-borrowloop-flow.md)用确定性服务完成匹配、邀请和状态机。[第三阶段](milestones/03-agent-integration.md)在同一服务接口上加入自然语言解析、澄清、可见的 Agent 行动及 provider fallback。实时推送在 [第四阶段](milestones/04-realtime-updates.md)加入。
 
+第二阶段仍由结构化表单提交必需字段；缺失字段返回验证错误，不启用对话澄清。Requester 在保存草稿后显式启动匹配。
+
 ## 状态机
 
 状态由服务层唯一控制；`draft` 是已创建但未开始匹配的请求，`collecting_details` 等待补充必需字段。终态为 `completed`、`cancelled`、`expired`、`failed`。
@@ -14,8 +16,8 @@
 | `collecting_details` | `searching`, `cancelled`, `expired` | 补齐字段、取消、截止时间到。 |
 | `searching` | `awaiting_response`, `failed`, `cancelled`, `expired` | 找到候选人并发 Offer、无可用候选人或服务错误、取消、截止时间到。 |
 | `awaiting_response` | `searching`, `matched`, `cancelled`, `expired` | 拒绝/Offer 超时后继续搜索、接受、取消、请求过期。 |
-| `matched` | `in_progress`, `cancelled`, `expired` | 双方开始交接、取消、截止时间到。 |
-| `in_progress` | `completed`, `cancelled`, `expired` | 双方确认交接、取消、截止时间到。 |
+| `matched` | `in_progress`, `cancelled` | 双方开始交接、Requester 取消。 |
+| `in_progress` | `completed`, `cancelled` | 双方确认交接、Requester 取消。 |
 
 任何未列出的转换都应拒绝并保留原状态。`failed` 表示本次流程无法继续且应记录可理解原因；模型或网络故障不能伪装为匹配成功。Offer 的 `pending → accepted/declined/expired` 是独立子状态，不能仅靠请求状态推断。截止时间和 Offer 响应超时分别处理。
 
@@ -26,7 +28,7 @@
 3. 调用 `search_helpers` 做物品、可用性、校内范围和时限等硬过滤，再由 `rank_candidates` 按可在截止前交接、建筑位置近远及稳定 ID 做确定性排序；无需实时地图服务。候选集、顺序和资格以数据库及规则为准，模型不能虚构。
 4. 对最合适且尚未联系的候选人调用 `send_help_offer`；站内 Inbox 与数据库记录表示已发送。进入 `awaiting_response`，记录公开事件。服务层保证同一请求与帮助者的重复调用不会重复发 Offer。
 5. `record_helper_response` 记录接受或拒绝；`check_offer_timeout` 处理到期未答。拒绝或超时后，`expand_search` 根据剩余候选人继续搜索并联系下一位；接受后由 `mark_request_matched` 记录匹配与交接信息。
-6. `start_request` 在双方开始交接时进入 `in_progress`。`complete_request` 需核验 Requester 和 Helper 各自确认；`cancel_request` 可按权限取消。达到请求截止时间时转为 `expired`。
+6. `start_request` 在双方开始交接时进入 `in_progress`。`complete_request` 需核验 Requester 和 Helper 各自确认；`cancel_request` 可按权限取消并释放预留物品。请求仍在寻找帮助者时，到达截止时间转为 `expired`；已匹配后不因该时间自动过期。
 
 每一步遵循“提出动作 → 校验参数 → 调用工具 → 观察权威结果 → 选择下一步”。工具返回拒绝、冲突、超时或空候选时，先重读当前状态和已联系名单，再选择未联系的候选人或向用户说明无法继续；不得重复写入或假定成功。公开 `AgentEvent` 只描述可理解的动作与结果，不记录隐藏 chain-of-thought。
 
