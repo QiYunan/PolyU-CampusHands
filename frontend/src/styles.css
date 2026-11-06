@@ -19,6 +19,7 @@ dl { display: grid; grid-template-columns: 8rem 1fr; gap: .8rem; line-height: 1.
 dt { color: #637579; }
 dd { margin: 0; overflow-wrap: anywhere; }
 .subtle { color: #637579; font-size: .9rem; }
+.connection-mode { display: inline-block; margin: .25rem 0 1rem; color: #637579; font-size: .8rem; }
 .back { display: inline-block; margin-top: 1.5rem; color: #176b5c; font-weight: 700; }
 .demo-bar { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; padding: .6rem max(1rem, calc((100vw - 640px) / 2)); background: #173f38; color: white; }
 .demo-bar strong { white-space: nowrap; }

@@ -22,6 +22,8 @@ from app.providers.base import LLMUnavailable
 from app.agent_tools import InvalidAgentAction
 from app.services import Forbidden, NotFound, advance_due
 from app.state_machine import StateConflict
+from app.realtime import ConnectionManager, EventScanner
+from app.ws_routes import router as ws_router
 
 
 logger = logging.getLogger(__name__)
@@ -36,6 +38,8 @@ def create_app(database_url: str | None = None, providers: ProviderRouter | None
         if config.primary not in available or config.fallback not in available:
             raise ValueError("Unsupported LLM provider configuration")
         providers = ProviderRouter(available[config.primary](), available[config.fallback]())
+    realtime_manager = ConnectionManager()
+    event_scanner = EventScanner(session_factory, realtime_manager)
 
     def tick() -> None:
         with session_factory() as session:
@@ -53,8 +57,11 @@ def create_app(database_url: str | None = None, providers: ProviderRouter | None
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         initialize_database(engine)
         tick()  # Recover due work after a process restart.
+        event_scanner.initialize_cursor()  # Connected clients reconcile via GET.
         task = asyncio.create_task(timeout_loop())
+        realtime_task = asyncio.create_task(event_scanner.run())
         application.state.timeout_task = task
+        application.state.realtime_task = realtime_task
         try:
             yield
         finally:
@@ -63,14 +70,23 @@ def create_app(database_url: str | None = None, providers: ProviderRouter | None
                 await task
             except asyncio.CancelledError:
                 pass
+            realtime_task.cancel()
+            try:
+                await realtime_task
+            except asyncio.CancelledError:
+                pass
+            await realtime_manager.close()
             await providers.close()
             engine.dispose()
 
     application = FastAPI(title="CampusHands API", lifespan=lifespan)
     application.state.session_factory = session_factory
     application.state.provider_router = providers
+    application.state.realtime_manager = realtime_manager
+    application.state.event_scanner = event_scanner
     application.include_router(router)
     application.include_router(agent_router)
+    application.include_router(ws_router)
 
     @application.exception_handler(RequestValidationError)
     async def invalid_request(_request, _error: RequestValidationError):

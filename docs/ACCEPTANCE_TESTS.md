@@ -40,7 +40,7 @@
 
 ## 04 实时更新
 
-**AT-12 状态推送。** Given Alice 正在查看请求且 Carol 打开 Inbox，When Bob 拒绝、Carol 接受，Then 订阅中的界面在无需手动刷新时看到按顺序到达的公开事件和最新状态；断线重连后通过 GET 对齐权威状态，不重复显示事件。
+**AT-12 状态推送。** Given Alice 正在查看请求、Bob 和 Carol 打开各自 Inbox，When Bob 拒绝，Then Alice 无需手动刷新即可看到按 ID 排序的公开事件，Carol 无需手动刷新即可看到新 Offer；When Carol 接受，Then Alice 无需手动刷新即可看到 `matched`。Given WebSocket 断线或通知重复，When 客户端重连或两秒轮询，Then 通过 HTTP GET 对齐权威状态和持久化事件，时间线不重复。无权角色不能订阅；通知失败不回滚已提交事务，通知中不含密钥或隐藏推理。
 
 ## 05 演示与协作
 

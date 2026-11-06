@@ -46,11 +46,13 @@
 | 03 | `GET /api/system/llm-status` | 返回当前 provider 类别和可用状态，不返回密钥。 |
 | 03 | `POST /api/agent/drafts`, `GET/PATCH /api/agent/drafts/{id}`, `POST /api/agent/drafts/{id}/clarify`, `POST /api/agent/drafts/{id}/confirm` | 解析、澄清、修改及幂等确认自然语言草稿。 |
 | 03 | `POST /api/agent/requests/{id}/search`, `POST /api/agent/requests/{id}/observe` | 模型提出受控动作或观察进展；现有服务决定匹配与邀请。 |
-| 04 | `WS /ws/requests/{request_id}` | 推送请求状态及公开事件。 |
+| 04 | `WS /ws/requests/{request_id}`, `WS /ws/helpers/{helper_id}/offers` | 推送请求公开事件与 Helper 自己的 Inbox 变化通知。 |
 
 `/start` 在已匹配后记录开始交接；`/complete` 记录 Requester 的确认；只有对应 Helper 也确认后，服务层才可进入 `completed`。原始清单缺少开始交接与 Helper 确认接口，因此在此补充。第一阶段请求输入为结构化字段；第三阶段增加自然语言解析入口时保持服务层的请求创建规则一致。具体输入输出 schema 在实现该阶段时确定。
 
-第二阶段的本地 Demo Mode 用 `X-Demo-User-Id` 表示当前虚构角色。原有请求接口缺少该 header 时默认为 Alice；Helper Inbox 和 Offer 操作必须带当前 Helper ID，服务层检查归属。该 header 可由本地用户切换，不是生产级认证。前端每两秒用 HTTP 读取公开状态；服务端以单进程定时检查处理 Offer 超时，并在重启后补处理到期记录。WebSocket 留待第四阶段。
+第二阶段的本地 Demo Mode 用 `X-Demo-User-Id` 表示当前虚构角色。原有请求接口缺少该 header 时默认为 Alice；Helper Inbox 和 Offer 操作必须带当前 Helper ID，服务层检查归属。该 header 可由本地用户切换，不是生产级认证。第二、三阶段的前端每两秒用 HTTP 读取公开状态；服务端以单进程定时检查处理 Offer 超时，并在重启后补处理到期记录。
+
+第四阶段的 WebSocket 只传输通知。浏览器以 `demo_user_id` 查询参数表示虚构角色，握手前仍由现有服务核对请求或 Inbox 访问权；仅接受文档化的本地开发 Origin。这不构成生产认证。独立扫描器每 250 毫秒按 `AgentEvent.id` 升序读取已提交事件，使用该 ID 作为全局游标；只有读取、验证和路由成功后才前移游标。单个连接的队列或发送失败只移除该连接，不影响事务和其他订阅者。请求通知仅包含公开事件；Helper 通知只指向其自己的 Offer。前端先 GET、订阅后再 GET，后续收到通知时重读 HTTP 权威快照；断线后继续两秒轮询。内存连接管理仅适用于单进程 Demo，不支持多实例消息传播。
 
 第三阶段的 Agent 草稿独立于字段均非空的正式 `HelpRequest`。确认草稿在同一事务中创建正式 `draft` 请求，重复确认返回相同 ID。`HelpOffer.message` 是可空的公开邀请文案，旧 SQLite 数据库以幂等加列方式升级。模型仅收到可公开的最少结构化观察；DeepSeek 与 Ollama 使用相同的受限工具 schema，并由本地 Pydantic 再次验证。`finish` 只结束一次 Agent loop，`wait_for_response` 立即返回当前状态；两者都不改变业务状态。
 
