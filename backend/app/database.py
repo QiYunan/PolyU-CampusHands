@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 
@@ -44,6 +44,9 @@ def initialize_database(engine) -> None:
     from app.models import User  # Import before create_all so tables are registered.
 
     Base.metadata.create_all(engine)
+    if "message" not in {column["name"] for column in inspect(engine).get_columns("help_offers")}:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE help_offers ADD COLUMN message VARCHAR(300)"))
     with Session(engine) as session:
         if session.get(User, ALICE_ID) is None:
             session.add(User(id=ALICE_ID, display_name="Alice", campus_building="VA", availability_status="unknown"))

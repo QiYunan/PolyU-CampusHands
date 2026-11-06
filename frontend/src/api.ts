@@ -17,7 +17,7 @@ export type HelpRequest = {
   location: string;
   deadline: string;
   urgency: string | null;
-  status: "draft" | "collecting_details" | "searching" | "awaiting_response" | "matched" | "in_progress" | "completed" | "cancelled" | "expired" | "failed";
+  status: "draft" | "searching" | "awaiting_response" | "matched" | "in_progress" | "completed" | "cancelled" | "expired" | "failed";
   created_at: string;
   updated_at: string;
   events?: PublicEvent[];
@@ -40,6 +40,7 @@ export type HelpOffer = {
   helper_id: number;
   item_type: ItemType;
   item_name: string;
+  message?: string | null;
   location: string;
   deadline: string;
   status: string;
@@ -55,6 +56,40 @@ export type RequestInput = {
   location: string;
   deadline: string;
   raw_text?: string;
+};
+
+export type AgentDraft = {
+  id: number;
+  raw_text: string;
+  item_type: ItemType | null;
+  location: string | null;
+  deadline: string | null;
+  urgency: "normal" | "high" | null;
+  missing_fields: Array<"item_type" | "location" | "deadline">;
+  public_question: string | null;
+  status: "collecting_details" | "ready" | "confirmed";
+  request_id: number | null;
+  provider: string | null;
+  fallback_active: boolean;
+};
+
+export type LLMStatus = {
+  primary: string;
+  fallback: string | null;
+  active: string;
+  primary_status: string;
+  fallback_status: string | null;
+  fallback_active: boolean;
+};
+
+export type AgentRun = {
+  request_id: number;
+  status: HelpRequest["status"];
+  step_count: number;
+  provider: string | null;
+  fallback_active: boolean;
+  message: string;
+  action_committed: boolean;
 };
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
@@ -87,6 +122,39 @@ export function createHelpRequest(input: RequestInput): Promise<HelpRequest> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
+}
+
+export function createAgentDraft(raw_text: string): Promise<AgentDraft> {
+  return api("/api/agent/drafts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ raw_text }) });
+}
+
+export function getAgentDraft(id: number): Promise<AgentDraft> {
+  return api(`/api/agent/drafts/${id}`);
+}
+
+export function clarifyAgentDraft(id: number, text: string): Promise<AgentDraft> {
+  return api(`/api/agent/drafts/${id}/clarify`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+}
+
+export function editAgentDraft(id: number, edits: Partial<Pick<AgentDraft, "item_type" | "location" | "deadline" | "urgency">>): Promise<AgentDraft> {
+  return api(`/api/agent/drafts/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(edits) });
+}
+
+export function confirmAgentDraft(id: number): Promise<HelpRequest> {
+  return api(`/api/agent/drafts/${id}/confirm`, { method: "POST" });
+}
+
+export function agentSearch(id: string): Promise<AgentRun> {
+  return api(`/api/agent/requests/${encodeURIComponent(id)}/search`, { method: "POST" });
+}
+
+
+export function agentObserve(id: string): Promise<AgentRun> {
+  return api(`/api/agent/requests/${encodeURIComponent(id)}/observe`, { method: "POST" });
+}
+
+export function getLLMStatus(): Promise<LLMStatus> {
+  return api("/api/system/llm-status");
 }
 
 export function getHelpRequest(id: string): Promise<HelpRequest> {

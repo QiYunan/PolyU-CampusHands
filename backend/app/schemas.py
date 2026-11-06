@@ -103,6 +103,7 @@ class OfferRead(BaseModel):
     helper_id: int
     item_type: ItemType
     item_name: str
+    message: str | None = None
     location: str
     deadline: datetime
     status: str
@@ -120,6 +121,7 @@ class OfferRead(BaseModel):
             helper_id=offer.helper_id,
             item_type=offer.item.item_type,
             item_name=offer.item.item_name,
+            message=offer.message,
             location=offer.request.location,
             deadline=as_utc(offer.request.deadline),
             status=offer.status,

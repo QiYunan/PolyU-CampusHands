@@ -1,15 +1,15 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import {
-  actOnOffer, actOnRequest, createHelpRequest, getHelpRequest, getHelperOffers,
+  actOnOffer, actOnRequest, agentObserve, agentSearch, createHelpRequest, getHelpRequest, getHelperOffers,
   itemTypes, type HelpOffer, type HelpRequest, type ItemType, type OfferAction,
   type RequestAction,
 } from "./api";
+import NaturalRequestFlow from "./NaturalRequestFlow";
 
 const people: Record<number, string> = { 1: "Alice · Requester", 2: "Bob · Helper", 3: "Carol · Helper", 4: "David · Helper" };
 const statusLabels: Record<HelpRequest["status"], string> = {
   draft: "草稿",
-  collecting_details: "待补充信息",
   searching: "寻找帮助者中",
   awaiting_response: "等待帮助者回复",
   matched: "匹配成功",
@@ -66,7 +66,9 @@ function RequestFormPage() {
   return <main className="shell">
     <div className="eyebrow">CAMPUSHANDS · BORROWLOOP</div>
     <h1>创建借物请求</h1>
-    <p className="lead">以 Alice 的演示身份填写需求。保存草稿后，再开始寻找帮助者。</p>
+    <p className="lead">以 Alice 的演示身份描述需求；确认解析结果后，再开始寻找帮助者。</p>
+    <NaturalRequestFlow />
+    <h2>结构化表单 · Demo / 调试入口</h2>
     <form onSubmit={submit} className="card">
       <label htmlFor="item-type">需要借什么？</label>
       <select id="item-type" value={itemType} onChange={(event) => setItemType(event.target.value as ItemType)}>
@@ -89,6 +91,7 @@ function RequestDetailPage() {
   const [request, setRequest] = useState<HelpRequest | null>(null);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [agentNotice, setAgentNotice] = useState("");
 
   useEffect(() => {
     let active = true;
@@ -115,10 +118,35 @@ function RequestDetailPage() {
     }
   }
 
+  async function runAgent() {
+    if (!id) return;
+    setPending(true); setError("");
+    try {
+      const outcome = await agentSearch(id);
+      setAgentNotice(`${outcome.message}${outcome.fallback_active ? "（已切换本地备用模型）" : ""}`);
+      setRequest(await getHelpRequest(id));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Agent 暂不可用，请重试。");
+      void getHelpRequest(id).then(setRequest).catch(() => undefined);
+    } finally { setPending(false); }
+  }
+
+  async function observeAgent() {
+    if (!id) return;
+    setPending(true); setError("");
+    try {
+      const outcome = await agentObserve(id);
+      setAgentNotice(`${outcome.message}${outcome.fallback_active ? "（已切换本地备用模型）" : ""}`);
+      setRequest(await getHelpRequest(id));
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "Agent 暂不可用，请重试。"); }
+    finally { setPending(false); }
+  }
+
   return <main className="shell">
     <div className="eyebrow">CAMPUSHANDS · REQUEST #{id}</div>
     <h1>请求详情</h1>
     {error && <p role="alert" className="error card">{error}</p>}
+    {agentNotice && <p role="status" className="card">{agentNotice}</p>}
     {!request && !error && <p role="status">正在读取请求…</p>}
     {request && <>
       <section className="card" aria-label="请求信息">
@@ -132,7 +160,11 @@ function RequestDetailPage() {
           {request.handoff_location && <><dt>交接地点</dt><dd>{request.handoff_location}</dd></>}
         </dl>
         <div className="actions">
-          {request.status === "draft" && <button data-action="search" disabled={pending} onClick={() => void action("search")}>开始匹配</button>}
+          {request.status === "draft" && (request.events ?? []).some((event) => event.event_type === "request_parsed") ?
+            <button data-action="agent-search" disabled={pending} onClick={() => void runAgent()}>Agent 开始匹配</button> :
+            request.status === "draft" && <button data-action="search" disabled={pending} onClick={() => void action("search")}>开始匹配</button>}
+          {(request.events ?? []).some((event) => event.event_type === "request_parsed") && request.status !== "draft" &&
+            <button className="secondary" data-action="agent-observe" disabled={pending} onClick={() => void observeAgent()}>Agent 查看下一步</button>}
           {request.status === "matched" && <button data-action="start" disabled={pending} onClick={() => void action("start")}>开始交接</button>}
           {request.status === "in_progress" && !request.requester_confirmed && <button data-action="complete" disabled={pending} onClick={() => void action("complete")}>确认完成</button>}
           {["draft", "searching", "awaiting_response", "matched", "in_progress"].includes(request.status) &&
@@ -189,6 +221,7 @@ function HelperInboxPage({ actorId }: { actorId: number }) {
       <div className="status">{offer.item_name} · {offer.status}</div>
       <dl>
         <dt>物品</dt><dd>{itemTypes[offer.item_type]}</dd>
+        {offer.message && <><dt>邀请说明</dt><dd>{offer.message}</dd></>}
         <dt>交接地点</dt><dd>{offer.location}</dd>
         <dt>最晚需要时间</dt><dd>{displayTime(offer.deadline)}</dd>
         <dt>邀请有效至</dt><dd>{displayTime(offer.expires_at)}</dd>

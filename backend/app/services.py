@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.database import ALICE_ID
 from app.matching import rank_candidates
 from app.models import AgentEvent, HelpOffer, HelpRequest, User, UserItem
+from app.privacy import public_text
 from app.schemas import RequestCreate
 from app.state_machine import StateConflict, transition
 
@@ -100,7 +101,7 @@ def _expire_request(session: Session, request: HelpRequest, now: datetime) -> No
     _event(session, request, "request_expired", "请求已到截止时间")
 
 
-def _dispatch_next(session: Session, request: HelpRequest, now: datetime) -> None:
+def _dispatch_next(session: Session, request: HelpRequest, now: datetime, offer_message: str | None = None) -> None:
     if request.deadline <= now:
         _expire_request(session, request, now)
         return
@@ -117,6 +118,7 @@ def _dispatch_next(session: Session, request: HelpRequest, now: datetime) -> Non
         status="pending",
         sent_at=now,
         expires_at=min(request.deadline, now + timedelta(seconds=OFFER_TIMEOUT_SECONDS)),
+        message=offer_message or f"有同学想在 {request.location} 借用 {request.item_type}，请在邀请有效期内回复。",
     )
     session.add(offer)
     session.flush()
@@ -150,7 +152,7 @@ def create_request(session: Session, data: RequestCreate, actor_id: int = ALICE_
     record = HelpRequest(
         requester_id=ALICE_ID,
         category="borrow",
-        raw_text=data.raw_text,
+        raw_text=public_text(data.raw_text) if data.raw_text else None,
         item_type=data.item_type.value,
         location=data.location,
         deadline=deadline_utc.replace(tzinfo=None),
@@ -173,7 +175,7 @@ def get_request_for_actor(session: Session, request_id: int, actor_id: int) -> H
     return request
 
 
-def start_search(session: Session, request_id: int, actor_id: int, now: datetime | None = None) -> HelpRequest:
+def start_search(session: Session, request_id: int, actor_id: int, now: datetime | None = None, offer_message: str | None = None) -> HelpRequest:
     current = utc_naive(now)
     with write_transaction(session):
         request = _require_request(session, request_id)
@@ -188,7 +190,7 @@ def start_search(session: Session, request_id: int, actor_id: int, now: datetime
         else:
             transition(request, "searching")
             _event(session, request, "search_started", "正在寻找可用帮助者")
-            _dispatch_next(session, request, current)
+            _dispatch_next(session, request, current, offer_message)
         return request
 
 
@@ -292,7 +294,7 @@ def cancel_request(session: Session, request_id: int, actor_id: int) -> HelpRequ
     with write_transaction(session):
         request = _require_request(session, request_id)
         _require_requester(request, actor_id)
-        if request.status not in {"draft", "collecting_details", "searching", "awaiting_response", "matched", "in_progress"}:
+        if request.status not in {"draft", "searching", "awaiting_response", "matched", "in_progress"}:
             raise StateConflict("Request cannot be cancelled")
         offer = _pending_offer(session, request) or _accepted_offer(session, request)
         if offer is not None:

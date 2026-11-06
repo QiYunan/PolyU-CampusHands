@@ -8,8 +8,7 @@ class StateConflict(ValueError):
 
 
 ALLOWED: dict[str, set[str]] = {
-    "draft": {"collecting_details", "searching", "cancelled", "expired"},
-    "collecting_details": {"searching", "cancelled", "expired"},
+    "draft": {"searching", "cancelled", "expired"},
     "searching": {"awaiting_response", "failed", "cancelled", "expired"},
     "awaiting_response": {"searching", "matched", "cancelled", "expired"},
     "matched": {"in_progress", "cancelled"},
