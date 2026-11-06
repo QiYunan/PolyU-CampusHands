@@ -6,8 +6,9 @@
 
 ## 交付范围
 
-- 实现 `/ws/requests/{request_id}`，推送状态变化和公开 `AgentEvent`；仅向有权查看的演示角色开放对应数据。
-- 前端订阅、显示连接状态，并在断线重连后通过 HTTP GET 对齐当前权威状态。
+- 实现 `/ws/requests/{request_id}` 与 `/ws/helpers/{helper_id}/offers`，分别发送公开请求事件和仅属于该 Helper 的 Inbox 通知；握手前核对 Demo 角色权限与本地 Origin。
+- 只从已提交的 `AgentEvent` 按全局 ID 顺序发送通知；连接失败不影响业务事务或其他客户端。
+- 前端先 GET、订阅成功后再 GET，显示连接状态；断线时两秒 HTTP 轮询并指数退避重连。
 - 对事件使用稳定 ID 或序号去重，避免重复展示；不推送隐藏推理或敏感配置。
 
 ## 完成证据

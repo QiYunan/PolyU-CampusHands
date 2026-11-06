@@ -6,6 +6,7 @@ import {
   type RequestAction,
 } from "./api";
 import NaturalRequestFlow from "./NaturalRequestFlow";
+import { useRealtimeSnapshot } from "./realtime";
 
 const people: Record<number, string> = { 1: "Alice · Requester", 2: "Bob · Helper", 3: "Carol · Helper", 4: "David · Helper" };
 const statusLabels: Record<HelpRequest["status"], string> = {
@@ -94,23 +95,28 @@ function RequestDetailPage() {
   const [agentNotice, setAgentNotice] = useState("");
 
   useEffect(() => {
-    let active = true;
     if (!id) return;
     sessionStorage.setItem("lastRequestId", id);
-    const load = () => getHelpRequest(id)
-      .then((result) => { if (active) { setRequest(result); setError(""); } })
-      .catch((cause: unknown) => { if (active) setError(cause instanceof Error ? cause.message : "读取失败"); });
-    void load();
-    const timer = window.setInterval(() => { void load(); }, 2000);
-    return () => { active = false; window.clearInterval(timer); };
+    setRequest(null);
   }, [id]);
+
+  const realtime = useRealtimeSnapshot<HelpRequest>({
+    kind: "request", id: id ? Number(id) : null, actorId: 1,
+    load: () => getHelpRequest(id ?? ""),
+    onSnapshot: (snapshot) => {
+      const unique = new Map((snapshot.events ?? []).map((event) => [event.id, event]));
+      setRequest({ ...snapshot, events: [...unique.values()].sort((left, right) => left.id - right.id) });
+    },
+    onError: setError,
+    snapshotEventId: (snapshot) => Math.max(0, ...(snapshot.events ?? []).map((event) => event.id)),
+  });
 
   async function action(kind: RequestAction) {
     if (!id) return;
     setPending(true);
     setError("");
     try {
-      setRequest(await actOnRequest(id, kind));
+      realtime.applyAuthoritative(await actOnRequest(id, kind));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "操作失败，请重试");
     } finally {
@@ -124,10 +130,10 @@ function RequestDetailPage() {
     try {
       const outcome = await agentSearch(id);
       setAgentNotice(`${outcome.message}${outcome.fallback_active ? "（已切换本地备用模型）" : ""}`);
-      setRequest(await getHelpRequest(id));
+      realtime.applyAuthoritative(await getHelpRequest(id));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Agent 暂不可用，请重试。");
-      void getHelpRequest(id).then(setRequest).catch(() => undefined);
+      void realtime.refresh();
     } finally { setPending(false); }
   }
 
@@ -137,7 +143,7 @@ function RequestDetailPage() {
     try {
       const outcome = await agentObserve(id);
       setAgentNotice(`${outcome.message}${outcome.fallback_active ? "（已切换本地备用模型）" : ""}`);
-      setRequest(await getHelpRequest(id));
+      realtime.applyAuthoritative(await getHelpRequest(id));
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Agent 暂不可用，请重试。"); }
     finally { setPending(false); }
   }
@@ -145,6 +151,7 @@ function RequestDetailPage() {
   return <main className="shell">
     <div className="eyebrow">CAMPUSHANDS · REQUEST #{id}</div>
     <h1>请求详情</h1>
+    <p className="connection-mode" aria-label="连接状态">{realtime.mode === "live" ? "实时连接" : "轮询模式"}</p>
     {error && <p role="alert" className="error card">{error}</p>}
     {agentNotice && <p role="status" className="card">{agentNotice}</p>}
     {!request && !error && <p role="status">正在读取请求…</p>}
@@ -187,23 +194,17 @@ function HelperInboxPage({ actorId }: { actorId: number }) {
   const [error, setError] = useState("");
   const [pendingId, setPendingId] = useState<number | null>(null);
 
-  useEffect(() => {
-    if (actorId === 1) return;
-    let active = true;
-    const load = () => getHelperOffers(actorId)
-      .then((result) => { if (active) { setOffers(result); setError(""); } })
-      .catch((cause: unknown) => { if (active) setError(cause instanceof Error ? cause.message : "读取失败"); });
-    void load();
-    const timer = window.setInterval(() => { void load(); }, 2000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, [actorId]);
+  const realtime = useRealtimeSnapshot<HelpOffer[]>({
+    kind: "helper", id: actorId === 1 ? null : actorId, actorId,
+    load: () => getHelperOffers(actorId), onSnapshot: setOffers, onError: setError,
+  });
 
   async function action(offer: HelpOffer, kind: OfferAction) {
     setPendingId(offer.id);
     setError("");
     try {
       await actOnOffer(offer.id, actorId, kind);
-      setOffers(await getHelperOffers(actorId));
+      await realtime.refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "操作失败，请重试");
     } finally {
@@ -214,6 +215,7 @@ function HelperInboxPage({ actorId }: { actorId: number }) {
   return <main className="shell">
     <div className="eyebrow">CAMPUSHANDS · HELPER INBOX</div>
     <h1>{people[actorId]?.split(" · ")[0]} 的邀请</h1>
+    <p className="connection-mode" aria-label="连接状态">{realtime.mode === "live" ? "实时连接" : "轮询模式"}</p>
     <p className="lead">这里仅显示当前演示角色收到的站内借物请求。</p>
     {error && <p role="alert" className="error card">{error}</p>}
     {offers.length === 0 && !error && <p className="card">目前没有邀请。</p>}
