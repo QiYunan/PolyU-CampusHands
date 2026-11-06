@@ -32,3 +32,9 @@ dd { margin: 0; overflow-wrap: anywhere; }
 .timeline li { padding: .45rem 0; }
 .timeline time { display: block; color: #637579; font-size: .8rem; margin-top: .15rem; }
 @media (max-width: 480px) { .shell { margin: 1.5rem auto; } .card { padding: 1rem; } dl { grid-template-columns: 1fr; gap: .2rem; } dd { margin-bottom: .7rem; } }
+.natural-flow { display: grid; gap: 1rem; margin: 1.25rem 0 2rem; }
+.natural-flow form { display: grid; gap: .65rem; }
+.natural-flow .edit-fields { margin: 1rem 0; }
+.natural-flow h2, .system-status h2 { margin-top: 0; }
+.system-status { border-left: 4px solid #4e8b76; }
+.system-status p { margin-bottom: 0; }

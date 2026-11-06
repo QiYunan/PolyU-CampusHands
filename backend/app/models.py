@@ -40,6 +40,25 @@ class HelpRequest(Base):
     events: Mapped[list["AgentEvent"]] = relationship(back_populates="request")
 
 
+class HelpRequestDraft(Base):
+    __tablename__ = "help_request_drafts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    requester_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    raw_text: Mapped[str] = mapped_column(Text, nullable=False)
+    item_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    location: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    deadline: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    urgency: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    missing_fields_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    public_question: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    public_turns_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    request_id: Mapped[int | None] = mapped_column(ForeignKey("help_requests.id"), unique=True, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
+
+
 class UserItem(Base):
     __tablename__ = "user_items"
     __table_args__ = (UniqueConstraint("user_id", "item_type", "item_name", name="uq_user_item"),)
@@ -60,6 +79,7 @@ class HelpOffer(Base):
     request_id: Mapped[int] = mapped_column(ForeignKey("help_requests.id"), nullable=False)
     helper_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     item_id: Mapped[int] = mapped_column(ForeignKey("user_items.id"), nullable=False)
+    message: Mapped[str | None] = mapped_column(String(300), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     sent_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now_naive)
     responded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

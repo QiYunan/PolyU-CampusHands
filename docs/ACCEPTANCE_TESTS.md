@@ -28,9 +28,15 @@
 
 **AT-09 解析与澄清。** Given 固定时钟及中文借物输入“我 20 分钟后在 VA 考试，但计算器坏了，想借一部科学计算器”，When Mock provider 解析，Then 得到 `borrow`、`scientific_calculator`、`VA` 和相对固定时钟计算的截止时间；When 地点或截止时间缺失，Then 只提出所缺字段的澄清问题，不向帮助者发送 Offer。
 
+**AT-09a 草稿确认。** Given 自然语言请求缺地点和时限，When 用户补充字段、修改解析结果并刷新页面，Then 同一 `HelpRequestDraft` 仍可读取已确认的公开字段；When 用户确认两次，Then 只创建一条正式 `draft` 请求并返回同一 ID；确认前数据库无对应正式请求和 Offer。
+
 **AT-10 Provider fallback。** Given 主 provider 超时或返回 429/5xx，When 一次安全重试仍失败，Then 尝试 Ollama；Given 两者均失败，Then 返回可恢复错误且没有虚构匹配、重复 Offer 或状态跃迁。
 
+**AT-10a 动作边界。** Given 模型提议未知工具、非法参数或与当前请求不符的 ID，When Orchestrator 校验，Then 不执行业务动作；Given Offer 已提交后模型失败，Then 返回真实请求 ID 和权威状态，重试不会产生第二条 Offer；`finish` 与 `wait_for_response` 不更改借物状态，后者立即结束请求；拒绝后 Agent 观察结果不额外发送 Offer。
+
 **AT-11 隐私与离线 CI。** Given 测试与演示配置，When 运行后端和前端测试或读取公开 API/时间线，Then 测试不调用真实模型，响应与日志不出现 API key、学生证号、电话或隐藏推理。
+
+**AT-11a 状态与保密。** Given DeepSeek 未配置或本地 Ollama 不可用，When 读取 System Status 或提交自然语言请求，Then 页面仍可使用结构化表单；状态接口只显示 provider 类别、可用状态和 fallback 状态，不触发付费探测或返回密钥。
 
 ## 04 实时更新
 

@@ -8,12 +8,11 @@
 
 ## 状态机
 
-状态由服务层唯一控制；`draft` 是已创建但未开始匹配的请求，`collecting_details` 等待补充必需字段。终态为 `completed`、`cancelled`、`expired`、`failed`。
+状态由服务层唯一控制；正式请求的 `draft` 是已创建但未开始匹配的请求。第三阶段在独立 `HelpRequestDraft` 中使用 `collecting_details → ready → confirmed` 保存澄清状态，必需字段完整且经用户确认后才创建正式请求。正式请求终态为 `completed`、`cancelled`、`expired`、`failed`。
 
 | 当前状态 | 允许的下一状态 | 触发条件 |
 | --- | --- | --- |
-| `draft` | `collecting_details`, `searching`, `cancelled` | 字段缺失、字段齐全后启动、用户取消。 |
-| `collecting_details` | `searching`, `cancelled`, `expired` | 补齐字段、取消、截止时间到。 |
+| `draft` | `searching`, `cancelled` | Requester 明确启动匹配、用户取消；字段已在确认前校验。 |
 | `searching` | `awaiting_response`, `failed`, `cancelled`, `expired` | 找到候选人并发 Offer、无可用候选人或服务错误、取消、截止时间到。 |
 | `awaiting_response` | `searching`, `matched`, `cancelled`, `expired` | 拒绝/Offer 超时后继续搜索、接受、取消、请求过期。 |
 | `matched` | `in_progress`, `cancelled` | 双方开始交接、Requester 取消。 |
@@ -23,21 +22,23 @@
 
 ## 一次请求的行动顺序
 
-1. 接收请求。第三阶段由 `parse_help_request` 将自然语言映射为 `category`、`item_type`、`location`、`deadline`、`urgency`，并验证输出；第二阶段由结构化表单提供这些值。必需字段缺失时提出一条针对性澄清问题，保持 `collecting_details`。
-2. 用 `create_help_request` 保存请求。服务层核验当前演示用户、截止时间和字段。Milestone 01 创建成功后保持 `draft`；从 Milestone 02 启动匹配时才进入 `searching`。
+1. 接收请求。第三阶段由 `parse_help_request` 将自然语言映射为 `category`、`item_type`、`location`、`deadline`、`urgency`，并验证输出；第二阶段由结构化表单提供这些值。必需字段缺失时在独立草稿中提出仅针对缺失字段的澄清问题，不创建正式请求或 Offer。
+2. 用户修改或确认解析字段后，用 `create_help_request` 幂等保存正式请求。服务层核验演示用户、截止时间和字段。创建成功后保持 `draft`；显式启动匹配时才进入 `searching`。
 3. 调用 `search_helpers` 做物品、可用性、校内范围和时限等硬过滤，再由 `rank_candidates` 按可在截止前交接、建筑位置近远及稳定 ID 做确定性排序；无需实时地图服务。候选集、顺序和资格以数据库及规则为准，模型不能虚构。
 4. 对最合适且尚未联系的候选人调用 `send_help_offer`；站内 Inbox 与数据库记录表示已发送。进入 `awaiting_response`，记录公开事件。服务层保证同一请求与帮助者的重复调用不会重复发 Offer。
-5. `record_helper_response` 记录接受或拒绝；`check_offer_timeout` 处理到期未答。拒绝或超时后，`expand_search` 根据剩余候选人继续搜索并联系下一位；接受后由 `mark_request_matched` 记录匹配与交接信息。
+5. 现有确定性服务的 `record_helper_response` 记录接受或拒绝，`check_offer_timeout` 处理到期未答。拒绝或超时后，服务自动根据剩余候选人继续搜索并联系下一位；Agent 只观察并解释结果，不选择权威候选人。接受后服务记录匹配与交接信息。
 6. `start_request` 在双方开始交接时进入 `in_progress`。`complete_request` 需核验 Requester 和 Helper 各自确认；`cancel_request` 可按权限取消并释放预留物品。请求仍在寻找帮助者时，到达截止时间转为 `expired`；已匹配后不因该时间自动过期。
 
-每一步遵循“提出动作 → 校验参数 → 调用工具 → 观察权威结果 → 选择下一步”。工具返回拒绝、冲突、超时或空候选时，先重读当前状态和已联系名单，再选择未联系的候选人或向用户说明无法继续；不得重复写入或假定成功。公开 `AgentEvent` 只描述可理解的动作与结果，不记录隐藏 chain-of-thought。
+每一步遵循“提出动作 → 校验参数 → 调用工具 → 观察权威结果 → 选择下一步”，单次运行最多 6 个步骤和 3 次模型决策。`wait_for_response` 立即返回并终止本次运行，不保持 HTTP 请求；`finish` 仅终止 Agent loop，绝不完成真实借物任务。工具返回拒绝、冲突、超时或空候选时重读权威状态，不重复写入或假定成功。公开 `AgentEvent` 只描述可理解的动作与结果，不记录隐藏 chain-of-thought。
 
 ## 工具与信任边界
 
-计划中的工具接口为 `parse_help_request`、`create_help_request`、`search_helpers`、`rank_candidates`、`send_help_offer`、`record_helper_response`、`check_offer_timeout`、`expand_search`、`mark_request_matched`、`start_request`、`complete_request`、`cancel_request`。工具暴露的是经过限制的服务操作；数据库写入、过滤排序、超时、权限、状态转换和双人完成确认始终由确定性代码负责。模型可决定澄清措辞、邀请文案和下一步建议，但不能直接修改状态或伪造事实。
+模型可提议的工具仅为 `ask_clarification`、`create_help_request`（仅确认后）、`search_helpers`、`send_help_offer`、`observe_request`、`wait_for_response`、`finish`。自然语言解析为独立模型调用。`rank_candidates`、Helper 应答、超时、状态转换、取消与双人确认仍是服务内部操作，不暴露为模型工具。DeepSeek/Ollama 优先使用相同的 native function/tool schema，必要时兼容严格验证的 JSON 动作；所有名称和参数均由本地 allowlist 与 Pydantic 校验。
 
 ## 模型选择与 fallback（第三阶段）
 
 统一 provider 接口至少涵盖离线、结果稳定的 `MockLLMProvider`，以 DeepSeek 为主的 `DeepSeekProvider`，以及本地备用 `OllamaProvider`。业务服务不直接依赖某一供应商。配置由后端环境变量提供，例如 `LLM_PRIMARY_PROVIDER`、`LLM_FALLBACK_PROVIDER`、`LLM_TIMEOUT_SECONDS`、`DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL`、`OLLAMA_BASE_URL` 和 `OLLAMA_MODEL`；具体模型名与能力在接入时核验。
 
-主 provider 成功且输出通过 schema 验证时使用其结果。超时、连接失败、429 或 5xx 最多安全重试一次；仍失败时尝试本地备用。重试只用于可重复的模型读取/生成步骤，不能重放已执行的状态变更工具。备用也失败或结果无效时返回可恢复错误，并保留数据库中的真实状态，不合成匹配结果。CI 固定使用 Mock，不访问网络模型。
+主 provider 成功且输出通过 schema 验证时使用其结果。超时、连接失败、429、5xx、空 JSON 或 schema 错误最多安全重试一次；仍失败时尝试本地备用一次。重试只用于模型步骤，不能重放已执行的状态变更工具。备用也失败时返回可恢复错误；若业务动作已经提交，响应携带真实请求 ID 和状态供前端 GET 对齐，不回滚现实动作。CI 固定使用 Mock，不访问网络模型。普通解析和动作选择使用 non-thinking；复杂重规划才考虑 thinking，且不得保存或展示推理内容。
+
+本地 Ollama 请求直连 loopback，不继承系统代理；解析使用 JSON Schema 输出并保持本地 Pydantic 校验。若模型漏掉输入中唯一明确的 `N分钟后`，适配层只补回该数字并再次验证 schema；含糊或多个时间仍需用户澄清。此校正不赋予模型或适配层修改业务状态的权限。
