@@ -39,3 +39,12 @@ dd { margin: 0; overflow-wrap: anywhere; }
 .natural-flow h2, .system-status h2 { margin-top: 0; }
 .system-status { border-left: 4px solid #4e8b76; }
 .system-status p { margin-bottom: 0; }
+.system-status { margin-bottom: 1rem; }
+.mock-label { color: #875211; font-weight: 700; }
+.agent-outcome { margin-bottom: 1rem; border-left: 4px solid #176b5c; }
+.agent-outcome p { margin: .55rem 0 0; overflow-wrap: anywhere; }
+@media (max-width: 480px) {
+  .actions { display: grid; grid-template-columns: 1fr; }
+  .actions button, .offer > button { width: 100%; margin-top: .25rem; }
+  .demo-bar select { max-width: 100%; }
+}

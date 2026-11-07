@@ -45,7 +45,9 @@ const matched = { ...draft, status: "matched", matched_helper: "Carol", handoff_
 test("GET before and after subscribe closes the race; notifications reconcile without duplicate events", async () => {
   vi.stubGlobal("WebSocket", FakeSocket);
   let snapshot: typeof draft | typeof matched = draft;
-  const fetchMock = vi.fn(async () => ({ ok: true, json: async () => snapshot }));
+  const fetchMock = vi.fn(async (url: string) => ({ ok: true, json: async () =>
+    url.includes("llm-status") ? { primary: "mock", fallback: "mock", active: null, primary_status: "unknown", fallback_status: "unknown", fallback_active: false } : snapshot }));
+  const requestCalls = () => fetchMock.mock.calls.filter(([url]) => url.includes("/api/requests/")).length;
   vi.stubGlobal("fetch", fetchMock);
   render(<MemoryRouter initialEntries={["/requests/7"]}><App /></MemoryRouter>);
   expect(await screen.findByText(/状态：草稿/)).toBeInTheDocument();
@@ -55,10 +57,10 @@ test("GET before and after subscribe closes the race; notifications reconcile wi
   FakeSocket.instances[0].open();
   expect(await screen.findByText(/状态：匹配成功/)).toBeInTheDocument();
   expect(screen.getByLabelText("连接状态")).toHaveTextContent("实时连接");
-  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(requestCalls()).toBe(2);
   FakeSocket.instances[0].message(2);
   await new Promise((resolve) => setTimeout(resolve, 30));
-  expect(fetchMock).toHaveBeenCalledTimes(2); // Already covered by the second GET.
+  expect(requestCalls()).toBe(2); // Already covered by the second GET.
   expect(screen.getAllByText("Carol 已接受")).toHaveLength(1);
   const events = [...screen.getByRole("list", { name: "" }).querySelectorAll("li")];
   expect(events.map((item) => item.textContent)).toEqual(expect.arrayContaining([expect.stringContaining("已联系 Carol"), expect.stringContaining("Carol 已接受")]));
@@ -69,6 +71,7 @@ test("an older GET cannot overwrite a newer authoritative HTTP action response",
   let getCount = 0;
   let resolveStale: ((value: { ok: boolean; json: () => Promise<typeof draft> }) => void) | undefined;
   const fetchMock = vi.fn((url: string) => {
+    if (url.includes("llm-status")) return Promise.resolve({ ok: true, json: async () => ({ primary: "mock", fallback: "mock", active: null, primary_status: "unknown", fallback_status: "unknown", fallback_active: false }) });
     if (url.endsWith("/search")) return Promise.resolve({ ok: true, json: async () => matched });
     getCount += 1;
     if (getCount === 3) return new Promise<{ ok: boolean; json: () => Promise<typeof draft> }>((resolve) => { resolveStale = resolve; });

@@ -35,6 +35,8 @@
 
 模型可提议的工具仅为 `ask_clarification`、`create_help_request`（仅确认后）、`search_helpers`、`send_help_offer`、`observe_request`、`wait_for_response`、`finish`。自然语言解析为独立模型调用。`rank_candidates`、Helper 应答、超时、状态转换、取消与双人确认仍是服务内部操作，不暴露为模型工具。DeepSeek/Ollama 优先使用相同的 native function/tool schema，必要时兼容严格验证的 JSON 动作；所有名称和参数均由本地 allowlist 与 Pydantic 校验。
 
+Demo 结果卡片可显示 `validated_actions` 中的 `search_helpers` 或 `send_help_offer` 名称，前提是动作已通过本地校验并交给确定性服务执行。单次 Agent 运行最多接受一次只读 `search_helpers`；之后的工具列表移除它，避免模型对同一观测反复空转。被拒绝的提议、`finish`、`wait_for_response`、工具参数、模型原始响应和隐藏推理不进入该字段或公开时间线。模型由后端启动配置选定；演示中不提供公开的 provider 切换功能。真实演示优先 DeepSeek、自动 fallback 到 Ollama；明确标注的 Mock Recovery Mode 只能在计时前选择，不能冒充真实模型输出。
+
 ## 模型选择与 fallback（第三阶段）
 
 统一 provider 接口至少涵盖离线、结果稳定的 `MockLLMProvider`，以 DeepSeek 为主的 `DeepSeekProvider`，以及本地备用 `OllamaProvider`。业务服务不直接依赖某一供应商。配置由后端环境变量提供，例如 `LLM_PRIMARY_PROVIDER`、`LLM_FALLBACK_PROVIDER`、`LLM_TIMEOUT_SECONDS`、`DEEPSEEK_API_KEY`、`DEEPSEEK_BASE_URL`、`DEEPSEEK_MODEL`、`OLLAMA_BASE_URL` 和 `OLLAMA_MODEL`；具体模型名与能力在接入时核验。

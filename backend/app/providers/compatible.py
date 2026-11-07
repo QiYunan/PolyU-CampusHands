@@ -90,7 +90,7 @@ class CompatibleProvider:
     async def choose(self, observation: dict, allowed: list[str]) -> ActionProposal:
         response = await self._complete(
             messages=[
-                {"role": "system", "content": "Choose exactly one supplied tool. Tool arguments must identify only the observed request. For send_help_offer, write an optional short Chinese invitation based only on observed item_type and location, without names or claims of acceptance. Do not invent users, offers, status or completion. If native tool calling is unavailable, return JSON with name and arguments."},
+                {"role": "system", "content": "Choose exactly one supplied tool. Tool arguments must identify only the observed request. If a draft already has candidate_count, use send_help_offer to ask the deterministic service to create the next Offer; search_helpers only refreshes the same observation and should not be repeated. When the request is awaiting_response, use wait_for_response. For send_help_offer, write an optional short Chinese invitation based only on observed item_type and location, without names or claims of acceptance. Do not invent users, offers, status or completion. If native tool calling is unavailable, return JSON with name and arguments."},
                 {"role": "user", "content": json.dumps({"observation": observation, "allowed_actions": allowed}, ensure_ascii=False)},
             ],
             tools=tool_schemas(allowed),

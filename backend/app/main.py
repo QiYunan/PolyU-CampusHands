@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from app.database import database_url as default_database_url
 from app.database import initialize_database, make_engine, make_session_factory
+from app.demo_lock import demo_database_lock
 from app.routes import router
 from app.agent_routes import router as agent_router
 from app.providers.config import load_config
@@ -55,29 +56,30 @@ def create_app(database_url: str | None = None, providers: ProviderRouter | None
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
-        initialize_database(engine)
-        tick()  # Recover due work after a process restart.
-        event_scanner.initialize_cursor()  # Connected clients reconcile via GET.
-        task = asyncio.create_task(timeout_loop())
-        realtime_task = asyncio.create_task(event_scanner.run())
-        application.state.timeout_task = task
-        application.state.realtime_task = realtime_task
-        try:
-            yield
-        finally:
-            task.cancel()
+        with demo_database_lock(engine.url.database):
+            initialize_database(engine)
+            tick()  # Recover due work after a process restart.
+            event_scanner.initialize_cursor()  # Connected clients reconcile via GET.
+            task = asyncio.create_task(timeout_loop())
+            realtime_task = asyncio.create_task(event_scanner.run())
+            application.state.timeout_task = task
+            application.state.realtime_task = realtime_task
             try:
-                await task
-            except asyncio.CancelledError:
-                pass
-            realtime_task.cancel()
-            try:
-                await realtime_task
-            except asyncio.CancelledError:
-                pass
-            await realtime_manager.close()
-            await providers.close()
-            engine.dispose()
+                yield
+            finally:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                realtime_task.cancel()
+                try:
+                    await realtime_task
+                except asyncio.CancelledError:
+                    pass
+                await realtime_manager.close()
+                await providers.close()
+                engine.dispose()
 
     application = FastAPI(title="CampusHands API", lifespan=lifespan)
     application.state.session_factory = session_factory

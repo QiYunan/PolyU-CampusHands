@@ -56,6 +56,8 @@
 
 第三阶段的 Agent 草稿独立于字段均非空的正式 `HelpRequest`。确认草稿在同一事务中创建正式 `draft` 请求，重复确认返回相同 ID。`HelpOffer.message` 是可空的公开邀请文案，旧 SQLite 数据库以幂等加列方式升级。模型仅收到可公开的最少结构化观察；DeepSeek 与 Ollama 使用相同的受限工具 schema，并由本地 Pydantic 再次验证。`finish` 只结束一次 Agent loop，`wait_for_response` 立即返回当前状态；两者都不改变业务状态。
 
+第五阶段在 `AgentRunRead` 中增加 `validated_actions`：仅列出经本地 schema 校验且已交给确定性服务执行的受控工具名称，不包含参数、原始模型响应或推理。`/api/system/llm-status` 的 `active` 只代表本次成功的模型调用；尚未调用或本次双 provider 失败时为 `null`。`unknown` 表示尚未调用，不能当作可用性证明。Demo reset 固定作用于 `backend/.demo/campushands.db`，与默认开发数据库隔离；Demo 后端在运行时持有进程锁，reset 遇到占用即拒绝。操作与两阶段 preflight 见 [演示手册](DEMO_RUNBOOK.md)。
+
 ## 安全边界
 
 - 演示角色切换只代表本地 Demo Mode 的模拟身份，不构成真实 PolyU 认证或生产级权限证明。服务层仍按当前演示角色检查记录归属；真实部署前必须另行设计认证。

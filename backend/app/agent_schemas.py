@@ -99,3 +99,4 @@ class AgentRunRead(StrictModel):
     fallback_active: bool
     message: str
     action_committed: bool = False
+    validated_actions: list[Literal["search_helpers", "send_help_offer"]] = Field(default_factory=list)

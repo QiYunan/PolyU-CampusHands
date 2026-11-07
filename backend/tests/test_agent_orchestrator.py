@@ -38,6 +38,9 @@ def test_agent_search_wait_is_nonblocking_and_finish_never_completes(tmp_path):
         assert first.status_code == 200, first.text
         assert first.json()["status"] == "awaiting_response"
         assert first.json()["step_count"] == 2
+        assert first.json()["validated_actions"] == ["send_help_offer"]
+        assert set(first.json()) >= {"provider", "action_committed"}
+        assert "arguments" not in first.text and "raw_response" not in first.text
         second = client.post(f"/api/agent/requests/{request_id}/search")
         assert second.status_code == 200 and second.json()["status"] == "awaiting_response"
         bob = client.get("/api/helpers/2/offers", headers={"X-Demo-User-Id": "2"}).json()
@@ -51,6 +54,7 @@ def test_agent_search_wait_is_nonblocking_and_finish_never_completes(tmp_path):
         assert observed.status_code == 200
         assert observed.json()["status"] == "awaiting_response"
         assert observed.json()["action_committed"] is False
+        assert observed.json()["validated_actions"] == []
         assert "Carol" in observed.json()["message"]
         with app.state.session_factory() as session:
             assert session.scalar(select(func.count()).select_from(HelpOffer)) == 2
@@ -76,6 +80,7 @@ def test_failure_after_committed_offer_returns_authoritative_state(tmp_path):
         request_id = client.post("/api/requests", json=payload).json()["id"]
         result = client.post(f"/api/agent/requests/{request_id}/search")
         assert result.status_code == 200 and result.json()["action_committed"] is True
+        assert result.json()["validated_actions"] == ["send_help_offer"]
         assert result.json()["status"] == "awaiting_response"
         assert client.get(f"/api/requests/{request_id}").json()["status"] == "awaiting_response"
         with app.state.session_factory() as session:
@@ -93,8 +98,32 @@ def test_finish_only_stops_loop(tmp_path):
         request_id = client.post("/api/requests", json=payload).json()["id"]
         result = client.post(f"/api/agent/requests/{request_id}/search")
         assert result.status_code == 200 and result.json()["status"] == "draft"
+        assert result.json()["validated_actions"] == []
         with app.state.session_factory() as session:
             assert session.scalar(select(func.count()).select_from(HelpOffer)) == 0
+
+
+def test_read_only_search_is_allowed_once_per_run(tmp_path):
+    class SearchesFirst(MockLLMProvider):
+        async def choose(self, observation, allowed):
+            if observation["status"] == "draft":
+                name = "search_helpers" if "search_helpers" in allowed else "send_help_offer"
+                return ActionProposal(name=name, arguments={"request_id": observation["request_id"]})
+            return await super().choose(observation, allowed)
+
+    app = create_app(f"sqlite:///{(tmp_path / 'one-search.db').as_posix()}", ProviderRouter(SearchesFirst()))
+    with TestClient(app) as client:
+        with app.state.session_factory() as session:
+            seed_demo_people(session)
+        payload = {"item_type": "scientific_calculator", "location": "VA", "deadline": (datetime.now(timezone.utc) + timedelta(minutes=20)).isoformat()}
+        request_id = client.post("/api/requests", json=payload).json()["id"]
+        response = client.post(f"/api/agent/requests/{request_id}/search")
+        assert response.status_code == 200
+        assert response.json()["status"] == "awaiting_response"
+        assert response.json()["validated_actions"] == ["search_helpers", "send_help_offer"]
+        assert response.json()["step_count"] == 3
+        with app.state.session_factory() as session:
+            assert session.scalar(select(func.count()).select_from(HelpOffer)) == 1
 
 
 def test_wrong_request_id_from_model_is_rejected_without_offer(tmp_path):

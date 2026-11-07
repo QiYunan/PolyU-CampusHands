@@ -1,12 +1,13 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import {
   actOnOffer, actOnRequest, agentObserve, agentSearch, createHelpRequest, getHelpRequest, getHelperOffers,
-  itemTypes, type HelpOffer, type HelpRequest, type ItemType, type OfferAction,
+  itemTypes, type AgentRun, type HelpOffer, type HelpRequest, type ItemType, type OfferAction,
   type RequestAction,
 } from "./api";
 import NaturalRequestFlow from "./NaturalRequestFlow";
 import { useRealtimeSnapshot } from "./realtime";
+import SystemStatus, { providerLabel } from "./SystemStatus";
 
 const people: Record<number, string> = { 1: "Alice · Requester", 2: "Bob · Helper", 3: "Carol · Helper", 4: "David · Helper" };
 const statusLabels: Record<HelpRequest["status"], string> = {
@@ -42,10 +43,13 @@ function RequestFormPage() {
   const [deadline, setDeadline] = useState("");
   const [description, setDescription] = useState("");
   const [pending, setPending] = useState(false);
+  const pendingRef = useRef(false);
   const [error, setError] = useState("");
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (pendingRef.current) return;
+    pendingRef.current = true;
     setError("");
     setPending(true);
     try {
@@ -60,6 +64,7 @@ function RequestFormPage() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "创建请求失败，请重试。");
     } finally {
+      pendingRef.current = false;
       setPending(false);
     }
   }
@@ -92,12 +97,29 @@ function RequestDetailPage() {
   const [request, setRequest] = useState<HelpRequest | null>(null);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
-  const [agentNotice, setAgentNotice] = useState("");
+  const pendingRef = useRef(false);
+  const [agentOutcome, setAgentOutcome] = useState<AgentRun | null>(null);
+  const [statusRefreshToken, setStatusRefreshToken] = useState(0);
+
+  function beginAction(): boolean {
+    if (pendingRef.current) return false;
+    pendingRef.current = true;
+    setPending(true);
+    setError("");
+    return true;
+  }
+
+  function endAction(refreshProvider = false) {
+    pendingRef.current = false;
+    setPending(false);
+    if (refreshProvider) setStatusRefreshToken((value) => value + 1);
+  }
 
   useEffect(() => {
     if (!id) return;
     sessionStorage.setItem("lastRequestId", id);
     setRequest(null);
+    setAgentOutcome(null);
   }, [id]);
 
   const realtime = useRealtimeSnapshot<HelpRequest>({
@@ -112,48 +134,54 @@ function RequestDetailPage() {
   });
 
   async function action(kind: RequestAction) {
-    if (!id) return;
-    setPending(true);
-    setError("");
+    if (!id || !beginAction()) return;
     try {
       realtime.applyAuthoritative(await actOnRequest(id, kind));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "操作失败，请重试");
     } finally {
-      setPending(false);
+      endAction();
     }
   }
 
   async function runAgent() {
-    if (!id) return;
-    setPending(true); setError("");
+    if (!id || !beginAction()) return;
+    setAgentOutcome(null);
     try {
       const outcome = await agentSearch(id);
-      setAgentNotice(`${outcome.message}${outcome.fallback_active ? "（已切换本地备用模型）" : ""}`);
+      setAgentOutcome(outcome);
       realtime.applyAuthoritative(await getHelpRequest(id));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Agent 暂不可用，请重试。");
       void realtime.refresh();
-    } finally { setPending(false); }
+    } finally { endAction(true); }
   }
 
   async function observeAgent() {
-    if (!id) return;
-    setPending(true); setError("");
+    if (!id || !beginAction()) return;
+    setAgentOutcome(null);
     try {
       const outcome = await agentObserve(id);
-      setAgentNotice(`${outcome.message}${outcome.fallback_active ? "（已切换本地备用模型）" : ""}`);
+      setAgentOutcome(outcome);
       realtime.applyAuthoritative(await getHelpRequest(id));
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Agent 暂不可用，请重试。"); }
-    finally { setPending(false); }
+    finally { endAction(true); }
   }
 
   return <main className="shell">
     <div className="eyebrow">CAMPUSHANDS · REQUEST #{id}</div>
     <h1>请求详情</h1>
-    <p className="connection-mode" aria-label="连接状态">{realtime.mode === "live" ? "实时连接" : "轮询模式"}</p>
+    <SystemStatus refreshToken={statusRefreshToken} />
+    <p className="connection-mode" aria-label="连接状态">{realtime.mode === "live" ? "实时连接" : "轮询模式 · 每 2 秒更新"}</p>
     {error && <p role="alert" className="error card">{error}</p>}
-    {agentNotice && <p role="status" className="card">{agentNotice}</p>}
+    {pending && <p role="status">正在处理，请稍候…</p>}
+    {agentOutcome && <section className="card agent-outcome" aria-label="Agent 操作结果" role="status">
+      <strong>本次 Agent 操作记录</strong>
+      <p>当时结果：{agentOutcome.message}；当前阶段见下方请求状态。</p>
+      <p>来源：{providerLabel(agentOutcome.provider)}{agentOutcome.fallback_active ? " · 本地备用" : ""}</p>
+      <p>已验证并交给服务的工具：{agentOutcome.validated_actions?.length ? agentOutcome.validated_actions.join(" → ") : "无"}</p>
+      <p>{agentOutcome.action_committed ? "服务已提交操作" : "未提交业务操作"}</p>
+    </section>}
     {!request && !error && <p role="status">正在读取请求…</p>}
     {request && <>
       <section className="card" aria-label="请求信息">
@@ -191,15 +219,19 @@ function RequestDetailPage() {
 
 function HelperInboxPage({ actorId }: { actorId: number }) {
   const [offers, setOffers] = useState<HelpOffer[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState("");
   const [pendingId, setPendingId] = useState<number | null>(null);
+  const pendingRef = useRef(false);
 
   const realtime = useRealtimeSnapshot<HelpOffer[]>({
     kind: "helper", id: actorId === 1 ? null : actorId, actorId,
-    load: () => getHelperOffers(actorId), onSnapshot: setOffers, onError: setError,
+    load: () => getHelperOffers(actorId), onSnapshot: (snapshot) => { setOffers(snapshot); setLoaded(true); }, onError: setError,
   });
 
   async function action(offer: HelpOffer, kind: OfferAction) {
+    if (pendingRef.current) return;
+    pendingRef.current = true;
     setPendingId(offer.id);
     setError("");
     try {
@@ -208,6 +240,7 @@ function HelperInboxPage({ actorId }: { actorId: number }) {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "操作失败，请重试");
     } finally {
+      pendingRef.current = false;
       setPendingId(null);
     }
   }
@@ -215,10 +248,12 @@ function HelperInboxPage({ actorId }: { actorId: number }) {
   return <main className="shell">
     <div className="eyebrow">CAMPUSHANDS · HELPER INBOX</div>
     <h1>{people[actorId]?.split(" · ")[0]} 的邀请</h1>
-    <p className="connection-mode" aria-label="连接状态">{realtime.mode === "live" ? "实时连接" : "轮询模式"}</p>
+    <p className="connection-mode" aria-label="连接状态">{realtime.mode === "live" ? "实时连接" : "轮询模式 · 每 2 秒更新"}</p>
     <p className="lead">这里仅显示当前演示角色收到的站内借物请求。</p>
     {error && <p role="alert" className="error card">{error}</p>}
-    {offers.length === 0 && !error && <p className="card">目前没有邀请。</p>}
+    {!loaded && !error && <p role="status" className="card">正在读取邀请…</p>}
+    {pendingId !== null && <p role="status">正在更新邀请…</p>}
+    {loaded && offers.length === 0 && !error && <p className="card">目前没有邀请。</p>}
     {offers.map((offer) => <section className="card offer" key={offer.id} aria-label={`邀请 ${offer.id}`}>
       <div className="status">{offer.item_name} · {offer.status}</div>
       <dl>
@@ -229,11 +264,11 @@ function HelperInboxPage({ actorId }: { actorId: number }) {
         <dt>邀请有效至</dt><dd>{displayTime(offer.expires_at)}</dd>
       </dl>
       {offer.status === "pending" && <div className="actions">
-        <button data-action="accept" disabled={pendingId === offer.id} onClick={() => void action(offer, "accept")}>接受</button>
-        <button className="secondary" data-action="decline" disabled={pendingId === offer.id} onClick={() => void action(offer, "decline")}>拒绝</button>
+        <button data-action="accept" disabled={pendingId !== null} onClick={() => void action(offer, "accept")}>接受</button>
+        <button className="secondary" data-action="decline" disabled={pendingId !== null} onClick={() => void action(offer, "decline")}>拒绝</button>
       </div>}
       {offer.status === "accepted" && offer.request_status === "in_progress" && !offer.helper_confirmed &&
-        <button data-action="confirm-completion" disabled={pendingId === offer.id} onClick={() => void action(offer, "confirm-completion")}>确认交接完成</button>}
+        <button data-action="confirm-completion" disabled={pendingId !== null} onClick={() => void action(offer, "confirm-completion")}>确认交接完成</button>}
     </section>)}
   </main>;
 }
@@ -252,9 +287,9 @@ export default function App() {
   return <>
     <DemoRoleSwitcher actorId={actorId} onChange={switchRole} />
     <Routes>
-      <Route path="/" element={actorId === 1 ? <RequestFormPage /> : <HelperInboxPage actorId={actorId} />} />
-      <Route path="/requests/:id" element={actorId === 1 ? <RequestDetailPage /> : <HelperInboxPage actorId={actorId} />} />
-      <Route path="/helpers/:id/offers" element={actorId === 1 ? <main className="shell"><p>请选择 Helper 角色查看 Inbox。</p></main> : <HelperInboxPage actorId={actorId} />} />
+      <Route path="/" element={actorId === 1 ? <RequestFormPage /> : <HelperInboxPage key={actorId} actorId={actorId} />} />
+      <Route path="/requests/:id" element={actorId === 1 ? <RequestDetailPage /> : <HelperInboxPage key={actorId} actorId={actorId} />} />
+      <Route path="/helpers/:id/offers" element={actorId === 1 ? <main className="shell"><p>请选择 Helper 角色查看 Inbox。</p></main> : <HelperInboxPage key={actorId} actorId={actorId} />} />
       <Route path="*" element={<main className="shell"><h1>页面不存在</h1><Link to="/">返回首页</Link></main>} />
     </Routes>
   </>;
