@@ -44,6 +44,6 @@
 
 ## 05 演示与协作
 
-**AT-13 五分钟演示。** Given 可重复生成的 Alice/Bob/Carol/David 数据与 Demo Mode，When 演示者从创建请求开始依次切换 Bob 拒绝、Carol 接受并完成双方确认，Then 五分钟内能在可用界面看到每一步状态和公开时间线，不依赖真实学生或外部通知。
+**AT-13 五分钟演示。** Given 专用 Demo reset 后的 Alice/Bob/Carol/David 数据、Demo Mode，以及计时前选定并明确标识的真实 provider 或 Mock Recovery Mode，When Alice 用自然语言提出限时借计算器请求、确认解析字段并启动 Agent，Bob 拒绝、Carol 接受、双方确认交接，Then 在不超过 4 分 30 秒（含至少 30 秒缓冲）内看到本地验证后交给服务的工具名称、每一步服务端状态、实时更新和公开时间线；不依赖真实学生或外部通知，不把 Mock 称为真实模型。
 
-**AT-14 工程检查。** Given 干净的检出与文档化的启动步骤，When 在 CI 执行后端 pytest、前端 lint/test/build，Then 均通过且不访问真实模型；提交内容不含 `.env`、真实 key、数据库或用户数据。
+**AT-14 工程检查。** Given 干净的检出与文档化的启动步骤，When 安装依赖、对固定 Demo 数据库重复 reset、运行 setup/ready preflight，并在 CI 执行后端全量 pytest、前端 test/lint/build 和跟踪文件检查，Then 均能给出可靠退出码、CI 不访问真实 DeepSeek/Ollama，开发数据库及 `.env` 不被 reset 触碰；提交内容不含真实 key、数据库、日志、模型文件或真实用户数据。故障恢复、刷新、后端重启、双 provider 失败与 WebSocket 轮询回退按 [演示手册](DEMO_RUNBOOK.md)复核。

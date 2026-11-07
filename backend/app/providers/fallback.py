@@ -9,13 +9,15 @@ class ProviderRouter:
     def __init__(self, primary: LLMProvider, fallback: LLMProvider | None = None):
         self.primary = primary
         self.fallback = fallback
-        self.active = primary.name
+        self.active: str | None = None
         self.fallback_active = False
         self.states = {primary.name: "unknown" if primary.configured else "unconfigured"}
         if fallback is not None:
             self.states[fallback.name] = "unknown" if fallback.configured else "unconfigured"
 
     async def _call(self, method: str, *args):
+        self.active = None
+        self.fallback_active = False
         providers = [(self.primary, 2)]
         if self.fallback is not None and self.fallback.name != self.primary.name:
             providers.append((self.fallback, 1))

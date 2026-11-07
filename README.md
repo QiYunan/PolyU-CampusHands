@@ -1,54 +1,67 @@
 # CampusHands
 
-Milestone 04 adds WebSocket notifications to the deterministic BorrowLoop and Milestone 03 Agent flow. Alice still confirms a formal draft and explicitly starts matching; Bob can decline, Carol can accept, and both parties confirm the handoff. All people and items are fictional.
+CampusHands is a fictional PolyU BorrowLoop demo. Alice asks to borrow an item, the Agent may propose a validated action, and the deterministic service controls matching, offers and completion. Bob can decline, Carol can accept, and both parties confirm the handoff. Demo Mode is not student authentication.
+
+The timed walkthrough, recovery steps and known limits are in the [Demo runbook](docs/DEMO_RUNBOOK.md). Development rules are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Requirements
 
-- Python 3.11 or newer (the commands below use Python 3.14)
-- Node.js and npm
-- Windows PowerShell
+- Windows PowerShell, Python 3.11+, Node 24 (the locally verified version; Vite also accepts compatible Node 20.19+ or 22.12+)
+- No Docker or cloud deployment
+- DeepSeek and local Ollama only for a real-provider rehearsal. Mock Recovery Mode works completely offline and is always labelled as a simulation.
 
-## Start the backend
+## Start from a clean checkout
 
-From the repository root:
+Use three PowerShell terminals. The commands below start in the repository root. Keep secrets only in the ignored `backend/.env`; never put them in the frontend or a command log. The `reset` command does not open that file.
 
-```powershell
-cd backend
-py -3.14 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-$env:DATABASE_URL = "sqlite:///./campushands-demo.db"
-.\.venv\Scripts\python.exe -m app.seed
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --ws wsproto
-```
-
-The backend listens at `http://127.0.0.1:8000`; OpenAPI documentation is at `http://127.0.0.1:8000/docs`. The explicit seed command adds Alice, Bob, Carol, David, their fictional items, and one draft request without duplicating existing records. Use a new `DATABASE_URL` filename for an independent demo; existing SQLite files are preserved. The app checks offer timeouts while it runs and catches up on restart. Keep the server running while starting the frontend in another terminal.
-
-Milestone 04 requires the `wsproto` package declared in `backend/pyproject.toml`; the installation command above installs it. Uvicorn is started with `--ws wsproto` so browser WebSocket upgrades work.
-
-For a completely offline Agent demo, set `$env:LLM_PRIMARY_PROVIDER = "mock"` and `$env:LLM_FALLBACK_PROVIDER = "mock"` before starting Uvicorn. For manual provider testing, copy `backend/.env.example` to the ignored `backend/.env` and add your DeepSeek key there locally; the backend reads the key only from that file. Install and start Ollama separately, and pull `qwen3.5:4b` separately before testing fallback. Never paste or commit the key. The status endpoint reports provider categories and recent call state; it does not make a paid probe.
-
-## Start the frontend
-
-From the repository root in a new PowerShell terminal:
+**Terminal A — install, reset and start the backend**
 
 ```powershell
 cd frontend
+node --version
 npm.cmd ci
+cd ..
+cd backend
+py --version
+py -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+$env:DATABASE_URL = "sqlite:///./.demo/campushands.db"
+.\.venv\Scripts\python.exe -m app.demo reset
+$env:LLM_PRIMARY_PROVIDER = "mock"
+$env:LLM_FALLBACK_PROVIDER = "mock"
+.\.venv\Scripts\python.exe -m app.demo preflight --stage setup --mode mock
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --ws wsproto --host 127.0.0.1 --port 8000
+```
+
+**Terminal B — frontend**
+
+```powershell
+cd frontend
 npm.cmd run dev
 ```
 
-Open `http://127.0.0.1:5173`. Vite forwards `/api` and `/ws` to the local backend. Create a scientific calculator request at VA with a deadline at least ten minutes away, open its detail page, and click **开始匹配**. In separate browser tabs, select Bob and Carol in Demo Mode. Bob can decline; Carol's Inbox receives the next Offer without a manual refresh. When Carol accepts, Alice's request page shows `matched` and the ordered public timeline without a manual refresh. Return to Alice, start the handoff and confirm it; then switch to Carol to confirm completion. The connection label shows **实时连接** or **轮询模式**; an unavailable WebSocket falls back to a two-second HTTP poll. A request remains a `draft` until Alice starts matching. The deadline applies to finding a helper; after a match, the handoff may continue. A cancelled match releases the item, while a completed handoff keeps it unavailable.
-
-For the Agent path, enter a natural-language request on the Requester page. If fields are missing, answer the specific clarification question or edit the parsed fields. Confirm the parsed fields to create a formal `draft`, then click **Agent 开始匹配**. The model proposes an allowlisted action; the existing service chooses the helper and records the Offer. After a Helper response or timeout, **Agent 查看下一步** reads the authoritative result without changing it. A failed model call leaves the form usable and returns a retryable error. The existing structured form remains available below the Agent entry.
-
-## Check Milestones 01–04
+**Terminal C — running-service checks**
 
 ```powershell
 cd backend
-.\.venv\Scripts\python.exe -m pytest -q
+$env:DATABASE_URL = "sqlite:///./.demo/campushands.db"
+.\.venv\Scripts\python.exe -m app.demo preflight --stage ready --mode mock
 ```
 
-In a separate terminal:
+Open `http://127.0.0.1:5173`. The UI must visibly say **Mock Recovery Mode**. Both preflight stages return exit code 1 for blocking failures, so check that each prints only `PASS` or non-blocking `WARN` before the timed demo. The ready stage verifies FastAPI health, the frontend port, an authorized WebSocket upgrade and provider status without calling a model.
+
+For a **real-provider** rehearsal, use a fresh backend terminal without the two Mock environment variables. Put the DeepSeek key in the ignored `backend/.env` locally and start Ollama with `qwen3.5:4b` installed. Run both preflight commands with `--mode real` before the timer. The setup check reports only whether a local config file exists; the ready check reports backend configuration and recent call state, never the key. Preflight does not make a paid DeepSeek request. If the real path is unstable, stop the backend and select the labelled Mock configuration **before** the timed demo; never switch provider mode during it.
+
+The backend's normal development database is `backend/campushands.db`. The timed demo uses only `backend/.demo/campushands.db`, explicitly selected by `DATABASE_URL`. Stop the backend before each reset; a process lock also refuses reset while any backend is using that Demo database, even on another port. Reset recreates only this marked database with Alice, Bob, Carol, David and three items. It begins with no request, draft, Offer or event. The older `python -m app.seed` remains available for legacy additive fixtures; it is not a reset.
+
+## Offline checks
+
+```powershell
+cd backend
+$env:LLM_PRIMARY_PROVIDER = "mock"
+$env:LLM_FALLBACK_PROVIDER = "mock"
+.\.venv\Scripts\python.exe -m pytest -q
+```
 
 ```powershell
 cd frontend
@@ -57,10 +70,4 @@ npm.cmd run lint
 npm.cmd run build
 ```
 
-If the UI reports that it cannot reach the backend, start FastAPI on port 8000. If no Helper offers appear, run the seed command against the same `DATABASE_URL` used by the server. The seed command never resets an accepted item; use a fresh database filename to repeat the entire demo. Existing Milestone 01/02 records are preserved; initialization adds the Agent draft table and nullable Offer message column. WebSocket subscriptions use a fictional `demo_user_id` query value because browser WebSockets cannot set the HTTP Demo header; neither mechanism is real authentication. The in-memory broadcaster supports only one FastAPI process. Do not commit `.env`, database files, or real student data. Offline tests use Mock and do not contact DeepSeek or Ollama.
-
-## Repository layout
-
-- `backend/`: FastAPI, deterministic matching and state services, Agent/provider adapters, SQLite persistence, demo seed, pytest checks
-- `frontend/`: React, Vite, natural-language and structured Requester forms, Helper views with WebSocket notifications and HTTP polling fallback
-- `docs/`: product, architecture, workflow, acceptance scenarios, milestones
+From the repository root, run `py scripts/check_tracked_artifacts.py` to check candidate Git files without reading ignored `.env` or database files. The same checks run in [offline CI](.github/workflows/ci.yml). Do not use real student data or commit secrets, SQLite databases, logs or model files.

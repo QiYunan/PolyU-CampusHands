@@ -76,7 +76,7 @@ export type AgentDraft = {
 export type LLMStatus = {
   primary: string;
   fallback: string | null;
-  active: string;
+  active: string | null;
   primary_status: string;
   fallback_status: string | null;
   fallback_active: boolean;
@@ -90,6 +90,7 @@ export type AgentRun = {
   fallback_active: boolean;
   message: string;
   action_committed: boolean;
+  validated_actions: Array<"search_helpers" | "send_help_offer">;
 };
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {

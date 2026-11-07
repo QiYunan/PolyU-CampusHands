@@ -35,6 +35,7 @@ def test_primary_one_retry_then_fallback(code):
     asyncio.run(router.parse("text", __import__("datetime").datetime.now(__import__("datetime").timezone.utc), {}))
     assert primary.calls == 2 and fallback.calls == 1
     assert router.status()["fallback_active"] is True
+    assert router.status()["active"] == "ollama"
 
 
 def test_two_provider_failure_and_no_retry_on_nontransient():
@@ -44,6 +45,9 @@ def test_two_provider_failure_and_no_retry_on_nontransient():
     with pytest.raises(LLMUnavailable):
         asyncio.run(router.parse("text", __import__("datetime").datetime.now(__import__("datetime").timezone.utc), {}))
     assert primary.calls == fallback.calls == 1
+    assert router.status()["active"] is None
+    assert router.status()["primary_status"] == "unavailable"
+    assert router.status()["fallback_status"] == "unavailable"
 
 
 def test_allowlisted_native_tool_schema_is_shared():

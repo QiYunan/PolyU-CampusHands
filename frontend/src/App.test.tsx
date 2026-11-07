@@ -123,3 +123,26 @@ test("requester confirmation waits for helper confirmation", async () => {
   expect(await screen.findByText("你已确认，等待帮助者确认。")).toBeInTheDocument();
   expect(screen.getByText(/状态：交接中/)).toBeInTheDocument();
 });
+
+test("Helper Inbox blocks repeated Offer responses while the first is pending", async () => {
+  const offer = {
+    id: 21, request_id: 7, helper_id: 2, item_type: "scientific_calculator",
+    item_name: "Scientific calculator", location: "VA", deadline: saved.deadline,
+    status: "pending", request_status: "awaiting_response", sent_at: saved.created_at,
+    expires_at: saved.deadline, requester_confirmed: false, helper_confirmed: false,
+  };
+  let resolveDecline: ((value: { ok: boolean; json: () => Promise<typeof offer> }) => void) | undefined;
+  const fetchMock = vi.fn((url: string) => {
+    if (url.endsWith("/decline")) return new Promise<{ ok: boolean; json: () => Promise<typeof offer> }>((resolve) => { resolveDecline = resolve; });
+    return Promise.resolve({ ok: true, json: async () => url.includes("/helpers/") ? [offer] : saved });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
+  fireEvent.change(screen.getByLabelText("当前角色"), { target: { value: "2" } });
+  const decline = await screen.findByRole("button", { name: "拒绝" });
+  fireEvent.click(decline);
+  fireEvent.click(decline);
+  expect(fetchMock.mock.calls.filter(([url]) => url.endsWith("/decline"))).toHaveLength(1);
+  expect(screen.getByText("正在更新邀请…")).toBeInTheDocument();
+  resolveDecline?.({ ok: true, json: async () => ({ ...offer, status: "declined" }) });
+});

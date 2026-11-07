@@ -13,3 +13,8 @@ __pycache__/
 node_modules/
 dist/
 uploads/
+.demo/
+*.gguf
+*.safetensors
+*.pt
+*.pth
