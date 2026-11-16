@@ -4,7 +4,7 @@ export type RealtimeNotice = {
   version: 1;
   event_id: number;
   event_type: string;
-  resource_kind: "request" | "offer";
+  resource_kind: "request" | "offer" | "helper_board";
   resource_id: number;
   status: string;
   public_message: string;
@@ -19,7 +19,7 @@ export function noticeFromJson(value: string): RealtimeNotice | null {
     if (typeof parsed !== "object" || parsed === null) return null;
     const item = parsed as Record<string, unknown>;
     if (item.version !== 1 || !Number.isSafeInteger(item.event_id) || Number(item.event_id) <= 0 ||
-      (item.resource_kind !== "request" && item.resource_kind !== "offer") ||
+      (item.resource_kind !== "request" && item.resource_kind !== "offer" && item.resource_kind !== "helper_board") ||
       !Number.isSafeInteger(item.resource_id) || Number(item.resource_id) <= 0 ||
       typeof item.event_type !== "string" || typeof item.status !== "string" ||
       typeof item.public_message !== "string" || typeof item.created_at !== "string" ||
@@ -30,8 +30,8 @@ export function noticeFromJson(value: string): RealtimeNotice | null {
   }
 }
 
-function socketUrl(kind: "request" | "helper", id: number, actorId: number): string {
-  const path = kind === "request" ? `/ws/requests/${id}` : `/ws/helpers/${id}/offers`;
+function socketUrl(kind: "request" | "helper" | "helper_board", id: number, actorId: number): string {
+  const path = kind === "request" ? `/ws/requests/${id}` : kind === "helper_board" ? "/ws/helper-board" : `/ws/helpers/${id}/offers`;
   const url = new URL(path, window.location.href);
   url.protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   url.searchParams.set("demo_user_id", String(actorId));
@@ -39,7 +39,7 @@ function socketUrl(kind: "request" | "helper", id: number, actorId: number): str
 }
 
 export function useRealtimeSnapshot<T>({ kind, id, actorId, load, onSnapshot, onError, snapshotEventId }: {
-  kind: "request" | "helper";
+  kind: "request" | "helper" | "helper_board";
   id: number | null;
   actorId: number;
   load: () => Promise<T>;
@@ -151,7 +151,8 @@ export function useRealtimeSnapshot<T>({ kind, id, actorId, load, onSnapshot, on
       current.onmessage = (event: MessageEvent) => {
         const notice = typeof event.data === "string" ? noticeFromJson(event.data) : null;
         if (!notice || (kind === "request" && (notice.resource_kind !== "request" || notice.resource_id !== targetId)) ||
-          (kind === "helper" && notice.resource_kind !== "offer")) {
+          (kind === "helper" && notice.resource_kind !== "offer") ||
+          (kind === "helper_board" && (notice.resource_kind !== "helper_board" || notice.resource_id !== targetId))) {
           current.close(1003);
           return;
         }

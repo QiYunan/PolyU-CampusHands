@@ -31,7 +31,7 @@ export default function SystemStatus({ refreshToken = 0 }: { refreshToken?: numb
   }, [refreshToken]);
   return <section className="system-status card" aria-label="System Status">
     <h2>System Status</h2>
-    {error ? <p>模型状态暂不可读取；可重试或使用结构化表单。</p> : status ? <>
+    {error ? <p>模型状态暂不可读取，请稍后重试。</p> : status ? <>
       {status.primary === "mock" && <p className="mock-label">Mock Recovery Mode：离线模拟，不代表真实模型结果。</p>}
       <p>主模型：{providerLabel(status.primary)}（{stateLabel(status.primary_status)}）</p>
       {status.fallback && status.fallback !== status.primary &&

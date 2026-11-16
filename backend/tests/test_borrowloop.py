@@ -1,220 +1,142 @@
-"""Milestone 02 acceptance and regression checks."""
+"""BorrowLoop regression checks for the open Helper board and first valid claim."""
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-import time
+from threading import Barrier
 
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, func, inspect, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import initialize_database, make_engine
 from app.main import create_app
 from app.models import AgentEvent, HelpOffer, HelpRequest, User, UserItem
-from app.seed import seed_demo_people, seed_demo_request
-from app.services import accept_offer, advance_due, cancel_request, start_search
+from app.providers.fallback import ProviderRouter
+from app.providers.mock import MockLLMProvider
+from app.schemas import ClaimRequest
+from app.seed import DEMO_HELPERS, seed_demo_people, seed_demo_request
+from app.services import ClaimConflict, advance_due, claim_request
 
 
-def request_payload(minutes=20):
-    return {
-        "item_type": "scientific_calculator",
-        "location": "VA",
-        "deadline": (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat(),
-    }
+def _app(tmp_path):
+    return create_app(f"sqlite:///{(tmp_path / 'borrowloop.db').as_posix()}", ProviderRouter(MockLLMProvider()))
 
 
-def helper_headers(user_id):
-    return {"X-Demo-User-Id": str(user_id)}
+def _payload(minutes=20, location="Z"):
+    return {"category": "borrow", "need_summary": "Casio 科学计算器",
+            "item_type": "scientific_calculator", "location": location,
+            "preferred_brand": "Casio",
+            "deadline": (datetime.now(timezone.utc) + timedelta(minutes=minutes)).isoformat()}
 
 
-def prepare_client(tmp_path):
-    app = create_app(f"sqlite:///{(tmp_path / 'demo.db').as_posix()}")
-    return app
+def _claim_payload(**overrides):
+    return {"capability_confirmed": True, "response_type": "direct",
+            "offered_brand": "Casio", **overrides}
+
+
+def _headers(helper_id):
+    return {"X-Demo-User-Id": str(helper_id)}
 
 
 def test_seed_is_repeatable_and_preserves_existing_requests(tmp_path):
     engine = make_engine(f"sqlite:///{(tmp_path / 'seed.db').as_posix()}")
     initialize_database(engine)
     with Session(engine) as session:
-        original = HelpRequest(requester_id=1, category="borrow", item_type="umbrella", location="VA", deadline=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=1), status="draft")
-        session.add(original)
+        session.add(HelpRequest(requester_id=1, item_type="umbrella", location="VA",
+            deadline=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=1), status="draft"))
         session.commit()
-        original_id = original.id
-    with Session(engine) as session:
+        original_id = session.scalar(select(HelpRequest.id))
         seed_demo_people(session)
-        demo = seed_demo_request(session)
-        demo_id = demo.id
+        demo_id = seed_demo_request(session).id
         seed_demo_people(session)
         assert seed_demo_request(session).id == demo_id
         assert session.get(HelpRequest, original_id).item_type == "umbrella"
-        assert session.scalar(select(func.count()).select_from(User)) == 4
-        assert session.scalar(select(func.count()).select_from(UserItem)) == 3
-        assert session.scalar(select(func.count()).select_from(HelpRequest)) == 2
+        assert session.scalar(select(func.count()).select_from(User)) == len(DEMO_HELPERS) + 1
+        assert session.scalar(select(func.count()).select_from(UserItem)) == len(DEMO_HELPERS)
         assert session.scalar(select(func.count()).select_from(HelpOffer)) == 0
     engine.dispose()
 
 
-def test_existing_milestone_01_database_adds_tables_without_changing_request(tmp_path):
-    engine = make_engine(f"sqlite:///{(tmp_path / 'legacy.db').as_posix()}")
-    User.__table__.create(engine)
-    HelpRequest.__table__.create(engine)
-    with Session(engine) as session:
-        session.add(User(id=1, display_name="Alice", campus_building="VA", availability_status="unknown"))
-        session.add(HelpRequest(requester_id=1, category="borrow", item_type="umbrella", location="VA", deadline=datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=1), status="draft"))
-        session.commit()
-    initialize_database(engine)
-    with Session(engine) as session:
-        assert session.get(HelpRequest, 1).status == "draft"
-        assert session.get(HelpRequest, 1).item_type == "umbrella"
-        assert session.scalar(select(func.count()).select_from(User)) == 1
-    assert {"users", "help_requests", "user_items", "help_offers", "agent_events"} <= set(inspect(engine).get_table_names())
-    engine.dispose()
-
-
-def test_decline_then_accept_and_two_confirmations(tmp_path):
-    app = prepare_client(tmp_path)
+def test_publish_dismiss_restore_claim_and_completion(tmp_path):
+    app = _app(tmp_path)
     with TestClient(app) as client:
         with app.state.session_factory() as session:
             seed_demo_people(session)
-        created = client.post("/api/requests", json=request_payload())
-        assert created.status_code == 201 and created.json()["status"] == "draft"
-        request_id = created.json()["id"]
-        started = client.post(f"/api/requests/{request_id}/search")
-        assert started.status_code == 200 and started.json()["status"] == "awaiting_response"
-        assert client.post(f"/api/requests/{request_id}/search").status_code == 200
-        bob = client.get("/api/helpers/2/offers", headers=helper_headers(2)).json()
-        assert len(bob) == 1 and bob[0]["status"] == "pending"
-        assert client.get("/api/helpers/3/offers", headers=helper_headers(3)).json() == []
-        bob_id = bob[0]["id"]
-        assert client.post(f"/api/offers/{bob_id}/decline", headers=helper_headers(2)).status_code == 200
-        assert client.post(f"/api/offers/{bob_id}/decline", headers=helper_headers(2)).status_code == 200
-        carol = client.get("/api/helpers/3/offers", headers=helper_headers(3)).json()
-        assert len(carol) == 1 and carol[0]["status"] == "pending"
-        carol_id = carol[0]["id"]
-        accepted = client.post(f"/api/offers/{carol_id}/accept", headers=helper_headers(3))
-        assert accepted.status_code == 200 and accepted.json()["status"] == "accepted"
-        assert client.post(f"/api/offers/{carol_id}/accept", headers=helper_headers(3)).status_code == 200
-        matched = client.get(f"/api/requests/{request_id}").json()
-        assert matched["status"] == "matched" and matched["matched_helper"] == "Carol"
-        assert matched["handoff_location"] == "VA"
+        roles = client.get("/api/demo/roles").json()
+        assert {(role["id"], role["display_name"]) for role in roles} >= {(2, "Bob"), (3, "Carol"), (5, "Erin"), (7, "Grace")}
+        request_id = client.post("/api/requests", json=_payload()).json()["id"]
+        assert client.post(f"/api/requests/{request_id}/publish").json()["status"] == "awaiting_response"
+        assert client.post(f"/api/requests/{request_id}/publish").json()["status"] == "awaiting_response"
+        with app.state.session_factory() as session:
+            assert session.scalar(select(func.count()).select_from(HelpOffer)) == 0
+        for actor in (5, 7):
+            board = client.get("/api/helper-board", headers=_headers(actor)).json()
+            assert board["requests"][0]["id"] == request_id
+            assert set(board["viewer"]) == {"id", "display_name"}
+        assert client.post(f"/api/requests/{request_id}/dismiss", headers=_headers(5)).json()["requests"] == []
+        assert client.get("/api/helper-board", headers=_headers(7)).json()["requests"]
+        assert client.post(f"/api/requests/{request_id}/dismiss", headers=_headers(5)).status_code == 200
+        assert client.post(f"/api/requests/{request_id}/restore", headers=_headers(5)).json()["requests"]
+        assert client.post(f"/api/requests/{request_id}/restore", headers=_headers(5)).status_code == 200
+        winner = client.post(f"/api/requests/{request_id}/claim", headers=_headers(5), json=_claim_payload())
+        assert winner.status_code == 200 and winner.json()["status"] == "accepted"
+        assert client.post(f"/api/requests/{request_id}/claim", headers=_headers(5), json=_claim_payload()).json()["id"] == winner.json()["id"]
+        loser = client.post(f"/api/requests/{request_id}/claim", headers=_headers(7), json=_claim_payload())
+        assert loser.status_code == 409 and loser.json()["code"] == "already_claimed"
+        assert client.get("/api/helper-board", headers=_headers(7)).json()["requests"] == []
         assert client.post(f"/api/requests/{request_id}/start").json()["status"] == "in_progress"
         assert client.post(f"/api/requests/{request_id}/complete").json()["status"] == "in_progress"
-        assert client.post(f"/api/offers/{carol_id}/confirm-completion", headers=helper_headers(3)).json()["request_status"] == "completed"
-        completed = client.get(f"/api/requests/{request_id}").json()
-        assert completed["status"] == "completed"
-        assert completed["requester_confirmed"] and completed["helper_confirmed"]
-        assert [event["event_type"] for event in completed["events"]].count("offer_sent") == 2
-        assert client.post(f"/api/requests/{request_id}/cancel").status_code == 409
-        assert client.post(f"/api/offers/{bob_id}/accept", headers=helper_headers(2)).status_code == 409
-        with app.state.session_factory() as session:
-            assert session.scalar(select(func.count()).select_from(HelpOffer)) == 2
-            assert session.get(UserItem, 2).available is False
+        assert client.post(f"/api/offers/{winner.json()['id']}/confirm-completion", headers=_headers(5)).json()["request_status"] == "completed"
+        view = client.get(f"/api/requests/{request_id}").json()
+        assert [event["event_type"] for event in view["events"]] == ["request_published", "request_claimed", "handoff_started", "request_completed"]
 
 
-def test_timeout_checks_deadline_before_next_helper(tmp_path):
-    engine = make_engine(f"sqlite:///{(tmp_path / 'timeout.db').as_posix()}")
-    initialize_database(engine)
-    with Session(engine) as session:
-        seed_demo_people(session)
-        now = datetime.now(timezone.utc)
-        request = HelpRequest(requester_id=1, category="borrow", item_type="scientific_calculator", location="VA", deadline=(now + timedelta(seconds=20)).replace(tzinfo=None), status="draft")
-        session.add(request)
-        session.commit()
-        request_id = request.id
-    with Session(engine) as session:
-        start_search(session, request_id, 1, now)
-    with Session(engine) as session:
-        advance_due(session, now + timedelta(seconds=21))
-    with Session(engine) as session:
-        advance_due(session, now + timedelta(seconds=22))
-        assert session.get(HelpRequest, request_id).status == "expired"
-        offers = session.scalars(select(HelpOffer).where(HelpOffer.request_id == request_id)).all()
-        assert len(offers) == 1 and offers[0].helper_id == 2 and offers[0].status == "expired"
-        events = session.scalars(select(AgentEvent).where(AgentEvent.request_id == request_id, AgentEvent.event_type == "offer_expired")).all()
-        assert len(events) == 1
-    engine.dispose()
-
-
-def test_timeout_contacts_carol_once_and_never_recontacts_bob(tmp_path):
-    engine = make_engine(f"sqlite:///{(tmp_path / 'retry.db').as_posix()}")
-    initialize_database(engine)
-    with Session(engine) as session:
-        seed_demo_people(session)
-        now = datetime.now(timezone.utc)
-        request = HelpRequest(requester_id=1, category="borrow", item_type="scientific_calculator", location="VA", deadline=(now + timedelta(minutes=10)).replace(tzinfo=None), status="draft")
-        session.add(request)
-        session.commit()
-        request_id = request.id
-    with Session(engine) as session:
-        start_search(session, request_id, 1, now)
-    with Session(engine) as session:
-        advance_due(session, now + timedelta(seconds=31))
-    with Session(engine) as session:
-        advance_due(session, now + timedelta(seconds=32))
-        offers = session.scalars(select(HelpOffer).where(HelpOffer.request_id == request_id).order_by(HelpOffer.id)).all()
-        assert [(offer.helper_id, offer.status) for offer in offers] == [(2, "expired"), (3, "pending")]
-    engine.dispose()
-
-
-def test_matched_cancellation_releases_item_and_deadline_no_longer_expires(tmp_path):
-    engine = make_engine(f"sqlite:///{(tmp_path / 'cancel.db').as_posix()}")
-    initialize_database(engine)
-    with Session(engine) as session:
-        seed_demo_people(session)
-        now = datetime.now(timezone.utc)
-        request = HelpRequest(requester_id=1, category="borrow", item_type="scientific_calculator", location="VA", deadline=(now + timedelta(minutes=1)).replace(tzinfo=None), status="draft")
-        session.add(request)
-        session.commit()
-        request_id = request.id
-    with Session(engine) as session:
-        start_search(session, request_id, 1, now)
-        offer_id = session.scalar(select(HelpOffer.id).where(HelpOffer.request_id == request_id))
-    with Session(engine) as session:
-        accept_offer(session, offer_id, 2, now + timedelta(seconds=5))
-    with Session(engine) as session:
-        advance_due(session, now + timedelta(minutes=2))
-        assert session.get(HelpRequest, request_id).status == "matched"
-    with Session(engine) as session:
-        cancel_request(session, request_id, 1)
-    with Session(engine) as session:
-        assert session.get(UserItem, 1).available is True
-        assert session.get(HelpRequest, request_id).status == "cancelled"
-    engine.dispose()
-
-
-def test_helper_permissions_and_timer_stops_on_shutdown(tmp_path):
-    app = prepare_client(tmp_path)
+def test_two_concurrent_helpers_create_exactly_one_accepted_offer(tmp_path):
+    app = _app(tmp_path)
     with TestClient(app) as client:
         with app.state.session_factory() as session:
             seed_demo_people(session)
-        request_id = client.post("/api/requests", json=request_payload()).json()["id"]
-        client.post(f"/api/requests/{request_id}/search")
-        bob_id = client.get("/api/helpers/2/offers", headers=helper_headers(2)).json()[0]["id"]
-        assert client.get("/api/helpers/2/offers").status_code == 403
-        assert client.get("/api/helpers/2/offers", headers=helper_headers(3)).status_code == 403
-        assert client.post(f"/api/offers/{bob_id}/accept", headers=helper_headers(3)).status_code == 403
-        assert client.post(f"/api/requests/{request_id}/cancel", headers=helper_headers(2)).status_code == 403
-    assert app.state.timeout_task.done()
+        request_id = client.post("/api/requests", json=_payload()).json()["id"]
+        client.post(f"/api/requests/{request_id}/publish")
+        gate = Barrier(2)
+
+        def try_claim(helper_id):
+            gate.wait(timeout=5)
+            with app.state.session_factory() as session:
+                try:
+                    response = ClaimRequest.model_validate(_claim_payload())
+                    return ("won", claim_request(session, request_id, helper_id, response).helper_id)
+                except ClaimConflict:
+                    return ("lost", helper_id)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = [future.result(timeout=10) for future in (
+                pool.submit(try_claim, 5), pool.submit(try_claim, 7))]
+        assert sorted(outcome for outcome, _ in results) == ["lost", "won"]
+        with app.state.session_factory() as session:
+            accepted = session.scalars(select(HelpOffer).where(
+                HelpOffer.request_id == request_id, HelpOffer.status == "accepted")).all()
+            assert len(accepted) == 1
+            assert session.get(HelpRequest, request_id).status == "matched"
+            assert accepted[0].item_id is None
 
 
-def test_background_timer_advances_an_overdue_offer_once(tmp_path):
-    app = prepare_client(tmp_path)
+def test_no_personal_timer_and_cancel_releases_item(tmp_path):
+    app = _app(tmp_path)
     with TestClient(app) as client:
         with app.state.session_factory() as session:
             seed_demo_people(session)
-        request_id = client.post("/api/requests", json=request_payload()).json()["id"]
-        client.post(f"/api/requests/{request_id}/search")
+        request_id = client.post("/api/requests", json=_payload()).json()["id"]
+        client.post(f"/api/requests/{request_id}/publish")
         with app.state.session_factory() as session:
-            bob = session.scalar(select(HelpOffer).where(HelpOffer.request_id == request_id))
-            bob.expires_at = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=1)
-            session.commit()
-        deadline = time.monotonic() + 4
-        while time.monotonic() < deadline:
-            offers = client.get("/api/helpers/3/offers", headers=helper_headers(3)).json()
-            if offers:
-                break
-            time.sleep(0.1)
-        assert len(offers) == 1 and offers[0]["status"] == "pending"
+            advance_due(session, datetime.now(timezone.utc) + timedelta(seconds=31))
+            assert session.get(HelpRequest, request_id).status == "awaiting_response"
+            assert session.scalar(select(func.count()).select_from(HelpOffer)) == 0
+        claim = client.post(f"/api/requests/{request_id}/claim", headers=_headers(5), json=_claim_payload()).json()
+        assert client.post(f"/api/requests/{request_id}/cancel", headers=_headers(5)).status_code == 403
+        assert client.post(f"/api/requests/{request_id}/cancel").json()["status"] == "cancelled"
         with app.state.session_factory() as session:
-            assert session.scalar(select(func.count()).select_from(HelpOffer).where(HelpOffer.request_id == request_id)) == 2
-            assert session.scalar(select(func.count()).select_from(AgentEvent).where(AgentEvent.request_id == request_id, AgentEvent.event_type == "offer_expired")) == 1
-    assert app.state.timeout_task.done()
+            cancelled_offer = session.get(HelpOffer, claim["id"])
+            assert cancelled_offer.status == "cancelled" and cancelled_offer.item_id is None
+            assert session.scalar(select(func.count()).select_from(AgentEvent).where(
+                AgentEvent.request_id == request_id, AgentEvent.event_type == "request_cancelled")) == 1

@@ -43,8 +43,33 @@ dd { margin: 0; overflow-wrap: anywhere; }
 .mock-label { color: #875211; font-weight: 700; }
 .agent-outcome { margin-bottom: 1rem; border-left: 4px solid #176b5c; }
 .agent-outcome p { margin: .55rem 0 0; overflow-wrap: anywhere; }
+.matching-issue { margin: 1.2rem 0; padding: 1rem; border-radius: .7rem; background: #fff6e5; border: 1px solid #e7c981; }
+.matching-issue p { margin: .5rem 0; line-height: 1.5; }
+.matching-note { color: #744d0d; background: #fff6e5; padding: .7rem; border-radius: .5rem; }
+.matching-issue .actions { align-items: center; }
+.inline-link { color: #176b5c; font-weight: 700; padding: .8rem 0; }
+.edit-request { margin: 1rem 0; padding: 1rem; border: 1px solid #d8e4df; border-radius: .7rem; }
+.edit-request .actions button { margin-top: .4rem; }
+.published-message, .board-notice { background: #def1ea; color: #245c4f; border-radius: .7rem; padding: .9rem 1rem; font-weight: 700; }
+.board-list { display: grid; gap: 1rem; margin: 1.5rem 0; }
+.board-list h2 { margin: 0; }
+.board-request .status { margin-bottom: 1rem; }
+.board-request .actions button { margin-top: .3rem; }
+.board-request button:disabled { cursor: not-allowed; }
+.board-eligible { color: #176b5c; font-weight: 700; }
+.dismissed-list { margin: 1rem 0; }
+.dismissed-list summary { cursor: pointer; font-weight: 700; }
+.dismissed-request { display: flex; align-items: center; justify-content: space-between; gap: .75rem; border-top: 1px solid #d8e4df; margin-top: .75rem; padding-top: .75rem; }
+.dismissed-request button { margin-top: 0; }
+.own-claim { margin-top: 1rem; border-left: 4px solid #176b5c; }
+.claim-dialog { margin: 1rem 0; border-left: 4px solid #176b5c; }
+.checkbox-label { display: flex; align-items: flex-start; gap: .65rem; line-height: 1.45; }
+.checkbox-label input { width: auto; margin-top: .2rem; }
+.proposal { margin-top: 1rem; border-left: 4px solid #d18b22; }
+.proposal h2 { margin-top: 0; font-size: 1.15rem; }
 @media (max-width: 480px) {
   .actions { display: grid; grid-template-columns: 1fr; }
   .actions button, .offer > button { width: 100%; margin-top: .25rem; }
   .demo-bar select { max-width: 100%; }
+  .dismissed-request { align-items: stretch; flex-direction: column; }
 }

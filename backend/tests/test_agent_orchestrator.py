@@ -19,15 +19,20 @@ def test_unknown_tool_and_invalid_arguments_are_rejected():
         assert False
     except ValueError:
         pass
+    try:
+        ActionProposal(name="send_help_offer", arguments={"request_id": 1})
+        assert False
+    except ValueError:
+        pass
     for args in ({"request_id": 2}, {"request_id": 1, "helper_id": 2}, {"request_id": "bad"}):
         try:
-            validate_action(ActionProposal(name="send_help_offer", arguments=args), ["send_help_offer"], 1)
+            validate_action(ActionProposal(name="publish_request", arguments=args), ["publish_request"], 1)
             assert False
         except ValueError:
             pass
 
 
-def test_agent_search_wait_is_nonblocking_and_finish_never_completes(tmp_path):
+def test_agent_publish_wait_is_nonblocking_and_finish_never_completes(tmp_path):
     app = create_app(f"sqlite:///{(tmp_path / 'loop.db').as_posix()}", ProviderRouter(MockLLMProvider()))
     with TestClient(app) as client:
         with app.state.session_factory() as session:
@@ -38,30 +43,27 @@ def test_agent_search_wait_is_nonblocking_and_finish_never_completes(tmp_path):
         assert first.status_code == 200, first.text
         assert first.json()["status"] == "awaiting_response"
         assert first.json()["step_count"] == 2
-        assert first.json()["validated_actions"] == ["send_help_offer"]
+        assert first.json()["validated_actions"] == ["publish_request"]
         assert set(first.json()) >= {"provider", "action_committed"}
         assert "arguments" not in first.text and "raw_response" not in first.text
         second = client.post(f"/api/agent/requests/{request_id}/search")
         assert second.status_code == 200 and second.json()["status"] == "awaiting_response"
-        bob = client.get("/api/helpers/2/offers", headers={"X-Demo-User-Id": "2"}).json()
-        assert len(bob) == 1 and bob[0]["message"]
         with app.state.session_factory() as session:
-            assert session.scalar(select(func.count()).select_from(HelpOffer)) == 1
+            assert session.scalar(select(func.count()).select_from(HelpOffer)) == 0
+            assert session.scalar(select(func.count()).select_from(AgentEvent).where(AgentEvent.event_type == "request_published")) == 1
             assert session.scalar(select(func.count()).select_from(AgentEvent).where(AgentEvent.event_type == "request_completed")) == 0
-        assert client.post(f"/api/offers/{bob[0]['id']}/decline", headers={"X-Demo-User-Id": "2"}).status_code == 200
-        assert len(client.get("/api/helpers/3/offers", headers={"X-Demo-User-Id": "3"}).json()) == 1
         observed = client.post(f"/api/agent/requests/{request_id}/observe")
         assert observed.status_code == 200
         assert observed.json()["status"] == "awaiting_response"
         assert observed.json()["action_committed"] is False
         assert observed.json()["validated_actions"] == []
-        assert "Carol" in observed.json()["message"]
+        assert "发布" in observed.json()["message"]
         with app.state.session_factory() as session:
-            assert session.scalar(select(func.count()).select_from(HelpOffer)) == 2
+            assert session.scalar(select(func.count()).select_from(HelpOffer)) == 0
 
 
-def test_failure_after_committed_offer_returns_authoritative_state(tmp_path):
-    class FailsAfterOffer(MockLLMProvider):
+def test_failure_after_committed_publication_returns_authoritative_state(tmp_path):
+    class FailsAfterPublication(MockLLMProvider):
         def __init__(self):
             self.calls = 0
 
@@ -71,7 +73,7 @@ def test_failure_after_committed_offer_returns_authoritative_state(tmp_path):
                 raise ProviderError("connection_or_timeout", retryable=False)
             return await super().choose(observation, allowed)
 
-    provider = FailsAfterOffer()
+    provider = FailsAfterPublication()
     app = create_app(f"sqlite:///{(tmp_path / 'partial.db').as_posix()}", ProviderRouter(provider))
     with TestClient(app) as client:
         with app.state.session_factory() as session:
@@ -80,11 +82,11 @@ def test_failure_after_committed_offer_returns_authoritative_state(tmp_path):
         request_id = client.post("/api/requests", json=payload).json()["id"]
         result = client.post(f"/api/agent/requests/{request_id}/search")
         assert result.status_code == 200 and result.json()["action_committed"] is True
-        assert result.json()["validated_actions"] == ["send_help_offer"]
+        assert result.json()["validated_actions"] == ["publish_request"]
         assert result.json()["status"] == "awaiting_response"
         assert client.get(f"/api/requests/{request_id}").json()["status"] == "awaiting_response"
         with app.state.session_factory() as session:
-            assert session.scalar(select(func.count()).select_from(HelpOffer)) == 1
+            assert session.scalar(select(func.count()).select_from(HelpOffer)) == 0
 
 
 def test_finish_only_stops_loop(tmp_path):
@@ -107,7 +109,7 @@ def test_read_only_search_is_allowed_once_per_run(tmp_path):
     class SearchesFirst(MockLLMProvider):
         async def choose(self, observation, allowed):
             if observation["status"] == "draft":
-                name = "search_helpers" if "search_helpers" in allowed else "send_help_offer"
+                name = "search_helpers" if "search_helpers" in allowed else "publish_request"
                 return ActionProposal(name=name, arguments={"request_id": observation["request_id"]})
             return await super().choose(observation, allowed)
 
@@ -120,16 +122,35 @@ def test_read_only_search_is_allowed_once_per_run(tmp_path):
         response = client.post(f"/api/agent/requests/{request_id}/search")
         assert response.status_code == 200
         assert response.json()["status"] == "awaiting_response"
-        assert response.json()["validated_actions"] == ["search_helpers", "send_help_offer"]
+        assert response.json()["validated_actions"] == ["search_helpers", "publish_request"]
         assert response.json()["step_count"] == 3
         with app.state.session_factory() as session:
-            assert session.scalar(select(func.count()).select_from(HelpOffer)) == 1
+            assert session.scalar(select(func.count()).select_from(HelpOffer)) == 0
 
 
-def test_wrong_request_id_from_model_is_rejected_without_offer(tmp_path):
+def test_repeated_model_search_helpers_is_rejected_without_publication(tmp_path):
+    class RepeatsReadOnly(MockLLMProvider):
+        async def choose(self, observation, allowed):
+            return ActionProposal(name="search_helpers", arguments={"request_id": observation["request_id"]})
+
+    app = create_app(f"sqlite:///{(tmp_path / 'repeat-read.db').as_posix()}", ProviderRouter(RepeatsReadOnly()))
+    with TestClient(app) as client:
+        with app.state.session_factory() as session:
+            seed_demo_people(session)
+        payload = {"item_type": "scientific_calculator", "location": "VA", "deadline": (datetime.now(timezone.utc) + timedelta(minutes=20)).isoformat()}
+        request_id = client.post("/api/requests", json=payload).json()["id"]
+        response = client.post(f"/api/agent/requests/{request_id}/search")
+        assert response.status_code == 422
+        assert client.get(f"/api/requests/{request_id}").json()["status"] == "draft"
+        with app.state.session_factory() as session:
+            assert session.scalar(select(func.count()).select_from(HelpOffer)) == 0
+            assert session.scalar(select(func.count()).select_from(AgentEvent).where(AgentEvent.event_type == "request_published")) == 0
+
+
+def test_wrong_request_id_from_model_is_rejected_without_publication(tmp_path):
     class WrongTarget(MockLLMProvider):
         async def choose(self, observation, allowed):
-            return ActionProposal(name="send_help_offer", arguments={"request_id": observation["request_id"] + 1})
+            return ActionProposal(name="publish_request", arguments={"request_id": observation["request_id"] + 1})
 
     app = create_app(f"sqlite:///{(tmp_path / 'wrong-target.db').as_posix()}", ProviderRouter(WrongTarget()))
     with TestClient(app) as client:

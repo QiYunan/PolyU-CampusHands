@@ -6,6 +6,7 @@ import App from "./App";
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   sessionStorage.clear();
 });
 
@@ -13,11 +14,16 @@ const saved = {
   id: 7,
   requester_id: 1,
   category: "borrow",
+  need_summary: "科学计算器",
   raw_text: "要考试",
   item_type: "scientific_calculator",
+  preferred_brand: null,
+  preferred_model: null,
+  substitution_policy: "equivalent_ok",
+  matching_issue: null,
   location: "VA",
   deadline: "2027-01-01T10:00:00Z",
-  urgency: null,
+  urgency: "normal",
   status: "draft",
   created_at: "2026-11-04T10:00:00Z",
   updated_at: "2026-11-04T10:00:00Z",
@@ -32,10 +38,20 @@ function futureLocalDateTime() {
   return new Date(future.getTime() - future.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 }
 
-test("submits the form and opens the persisted request page", async () => {
+test("hides the structured debug form by default", async () => {
+  vi.stubGlobal("fetch", mockFetch());
+  render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
+  expect(screen.queryByRole("heading", { name: /结构化表单/ })).not.toBeInTheDocument();
+  expect(screen.getByLabelText("描述你的需求")).toBeInTheDocument();
+});
+
+test("the explicit development switch restores the structured debug form", async () => {
+  vi.stubEnv("VITE_SHOW_STRUCTURED_DEBUG_FORM", "true");
   const fetchMock = mockFetch();
   vi.stubGlobal("fetch", fetchMock);
   render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
+  expect(screen.getByRole("heading", { name: /结构化表单/ })).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("需求摘要", { selector: "input#need-summary" }), { target: { value: "科学计算器" } });
   fireEvent.change(screen.getByLabelText("交接地点"), { target: { value: "VA" } });
   fireEvent.change(screen.getByLabelText("最晚需要时间"), { target: { value: futureLocalDateTime() } });
   fireEvent.click(screen.getByRole("button", { name: "保存请求" }));
@@ -54,60 +70,34 @@ test("loads the request from the API when the detail route opens directly", asyn
 });
 
 test("shows API validation errors without navigating", async () => {
+  vi.stubEnv("VITE_SHOW_STRUCTURED_DEBUG_FORM", "true");
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 422, json: async () => ({ detail: "deadline must be in the future" }) }));
   render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
+  fireEvent.change(screen.getByLabelText("需求摘要", { selector: "input#need-summary" }), { target: { value: "科学计算器" } });
   fireEvent.change(screen.getByLabelText("交接地点"), { target: { value: "VA" } });
   fireEvent.change(screen.getByLabelText("最晚需要时间"), { target: { value: futureLocalDateTime() } });
   fireEvent.click(screen.getByRole("button", { name: "保存请求" }));
   await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("deadline must be in the future"));
-  expect(screen.getByRole("heading", { name: "创建借物请求" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "描述你的需求" })).toBeInTheDocument();
 });
 
-test("starts matching from a draft and renders public timeline events", async () => {
-  const searching = {
+test("publishes a draft and renders a public publication event", async () => {
+  const published = {
     ...saved,
     status: "awaiting_response",
-    events: [{ id: 1, event_type: "offer_sent", public_message: "已联系 Bob", created_at: saved.created_at }],
+    events: [{ id: 1, event_type: "request_published", public_message: "请求已发布到求助广场", created_at: saved.created_at }],
   };
   const fetchMock = vi.fn(async (url: string) => ({
     ok: true,
-    json: async () => url.endsWith("/search") ? searching : saved,
+    json: async () => url.endsWith("/publish") ? published : saved,
   }));
   vi.stubGlobal("fetch", fetchMock);
   render(<MemoryRouter initialEntries={["/requests/7"]}><App /></MemoryRouter>);
-  fireEvent.click(await screen.findByRole("button", { name: "开始匹配" }));
-  expect(await screen.findByText("已联系 Bob")).toBeInTheDocument();
-  expect(screen.getByText(/状态：等待帮助者回复/)).toBeInTheDocument();
-  expect(fetchMock).toHaveBeenCalledWith("/api/requests/7/search", expect.objectContaining({ method: "POST" }));
-});
-
-test("switches to Bob and declines only his own offer", async () => {
-  const offer = {
-    id: 11, request_id: 7, helper_id: 2, item_type: "scientific_calculator",
-    item_name: "Scientific calculator", location: "VA", deadline: saved.deadline,
-    status: "pending", request_status: "awaiting_response", sent_at: saved.created_at,
-    expires_at: saved.deadline, requester_confirmed: false, helper_confirmed: false,
-  };
-  let declined = false;
-  const fetchMock = vi.fn(async (url: string) => {
-    if (url.endsWith("/decline")) {
-      declined = true;
-      return { ok: true, json: async () => ({ ...offer, status: "declined" }) };
-    }
-    if (url.includes("/helpers/2/offers")) {
-      return { ok: true, json: async () => [{ ...offer, status: declined ? "declined" : "pending" }] };
-    }
-    return { ok: true, json: async () => saved };
-  });
-  vi.stubGlobal("fetch", fetchMock);
-  render(<MemoryRouter initialEntries={["/requests/7"]}><App /></MemoryRouter>);
-  fireEvent.change(screen.getByLabelText("当前角色"), { target: { value: "2" } });
-  fireEvent.click(await screen.findByRole("button", { name: "拒绝" }));
-  await waitFor(() => expect(screen.getByText(/declined/)).toBeInTheDocument());
-  expect(fetchMock).toHaveBeenCalledWith("/api/offers/11/decline", expect.objectContaining({
-    method: "POST", headers: { "X-Demo-User-Id": "2" },
-  }));
-  expect(declined).toBe(true);
+  fireEvent.click(await screen.findByRole("button", { name: "发布到求助广场" }));
+  expect(await screen.findByText("请求已发布到求助广场")).toBeInTheDocument();
+  expect(screen.getByText(/状态：已发布，等待帮助者认领/)).toBeInTheDocument();
+  expect(screen.getByText("请求已发布，正在等待校园内的帮助者响应。")).toBeInTheDocument();
+  expect(fetchMock).toHaveBeenCalledWith("/api/requests/7/publish", expect.objectContaining({ method: "POST" }));
 });
 
 test("requester confirmation waits for helper confirmation", async () => {
@@ -122,27 +112,4 @@ test("requester confirmation waits for helper confirmation", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "确认完成" }));
   expect(await screen.findByText("你已确认，等待帮助者确认。")).toBeInTheDocument();
   expect(screen.getByText(/状态：交接中/)).toBeInTheDocument();
-});
-
-test("Helper Inbox blocks repeated Offer responses while the first is pending", async () => {
-  const offer = {
-    id: 21, request_id: 7, helper_id: 2, item_type: "scientific_calculator",
-    item_name: "Scientific calculator", location: "VA", deadline: saved.deadline,
-    status: "pending", request_status: "awaiting_response", sent_at: saved.created_at,
-    expires_at: saved.deadline, requester_confirmed: false, helper_confirmed: false,
-  };
-  let resolveDecline: ((value: { ok: boolean; json: () => Promise<typeof offer> }) => void) | undefined;
-  const fetchMock = vi.fn((url: string) => {
-    if (url.endsWith("/decline")) return new Promise<{ ok: boolean; json: () => Promise<typeof offer> }>((resolve) => { resolveDecline = resolve; });
-    return Promise.resolve({ ok: true, json: async () => url.includes("/helpers/") ? [offer] : saved });
-  });
-  vi.stubGlobal("fetch", fetchMock);
-  render(<MemoryRouter initialEntries={["/"]}><App /></MemoryRouter>);
-  fireEvent.change(screen.getByLabelText("当前角色"), { target: { value: "2" } });
-  const decline = await screen.findByRole("button", { name: "拒绝" });
-  fireEvent.click(decline);
-  fireEvent.click(decline);
-  expect(fetchMock.mock.calls.filter(([url]) => url.endsWith("/decline"))).toHaveLength(1);
-  expect(screen.getByText("正在更新邀请…")).toBeInTheDocument();
-  resolveDecline?.({ ok: true, json: async () => ({ ...offer, status: "declined" }) });
 });

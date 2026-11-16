@@ -15,6 +15,17 @@ def app_for(tmp_path):
     return create_app(f"sqlite:///{(tmp_path / 'agent.db').as_posix()}", ProviderRouter(MockLLMProvider()))
 
 
+def confirm_payload(draft, **changes):
+    payload = {
+        "category": draft["category"], "need_summary": draft["need_summary"],
+        "item_type": draft["item_type"], "preferred_brand": draft["preferred_brand"],
+        "preferred_model": draft["preferred_model"], "substitution_policy": draft["substitution_policy"],
+        "location": draft["location"], "deadline": draft["deadline"],
+        "urgency": draft["urgency"] or "normal",
+    }
+    return {**payload, **changes}
+
+
 def test_mock_parses_relative_time_against_fixed_clock(tmp_path):
     app = app_for(tmp_path)
     now = datetime(2026, 11, 5, 3, 0, tzinfo=timezone.utc)
@@ -37,7 +48,8 @@ def test_ambiguous_time_requires_clarification(tmp_path, time_phrase):
         assert result.status_code == 201
         assert result.json()["missing_fields"] == ["deadline"]
         assert result.json()["status"] == "collecting_details"
-        assert client.post(f"/api/agent/drafts/{result.json()['id']}/confirm").status_code == 409
+        body = result.json()
+        assert client.post(f"/api/agent/drafts/{body['id']}/confirm", json=confirm_payload(body)).status_code == 409
         with app.state.session_factory() as session:
             assert session.scalar(select(func.count()).select_from(HelpRequest)) == 0
             assert session.scalar(select(func.count()).select_from(HelpOffer)) == 0
@@ -52,13 +64,15 @@ def test_ambiguous_clarification_discards_previous_deadline(tmp_path):
         assert clarified.status_code == 200
         assert clarified.json()["deadline"] is None
         assert clarified.json()["missing_fields"] == ["deadline"]
-        assert client.post(f"/api/agent/drafts/{ready.json()['id']}/confirm").status_code == 409
+        clarified_body = clarified.json()
+        assert client.post(f"/api/agent/drafts/{ready.json()['id']}/confirm", json=confirm_payload(clarified_body)).status_code == 409
 
 
 @pytest.mark.parametrize("text,missing", [
     ("我想借一部科学计算器。", ["location", "deadline"]),
     ("我在VA想借一部科学计算器。", ["deadline"]),
     ("我20分钟后想借一部科学计算器。", ["location"]),
+    ("我20分钟后在VA交接。", ["need_summary"]),
 ])
 def test_missing_fields_never_create_request_or_offer(tmp_path, text, missing):
     app = app_for(tmp_path)
@@ -69,13 +83,13 @@ def test_missing_fields_never_create_request_or_offer(tmp_path, text, missing):
         assert result.json()["status"] == "collecting_details"
         draft_id = result.json()["id"]
         assert client.get(f"/api/agent/drafts/{draft_id}").json()["missing_fields"] == missing
-        assert client.post(f"/api/agent/drafts/{draft_id}/confirm").status_code == 409
+        assert client.post(f"/api/agent/drafts/{draft_id}/confirm", json=confirm_payload(result.json())).status_code == 409
         with app.state.session_factory() as session:
             assert session.scalar(select(func.count()).select_from(HelpRequest)) == 0
             assert session.scalar(select(func.count()).select_from(HelpOffer)) == 0
 
 
-def test_clarify_edit_confirm_is_persistent_and_idempotent(tmp_path):
+def test_confirm_applies_current_form_atomically_and_is_idempotent(tmp_path):
     app = app_for(tmp_path)
     with TestClient(app) as client:
         draft = client.post("/api/agent/drafts", json={"raw_text": "我想借一部科学计算器。"}).json()
@@ -84,14 +98,20 @@ def test_clarify_edit_confirm_is_persistent_and_idempotent(tmp_path):
         assert clarified.status_code == 200, clarified.text
         assert clarified.json()["status"] == "ready"
         assert clarified.json()["missing_fields"] == []
-        corrected = client.patch(f"/api/agent/drafts/{draft_id}", json={"location": "PQ"})
-        assert corrected.status_code == 200 and corrected.json()["location"] == "PQ"
-        first = client.post(f"/api/agent/drafts/{draft_id}/confirm")
-        second = client.post(f"/api/agent/drafts/{draft_id}/confirm")
+        form = confirm_payload(clarified.json(), location="PQ", need_summary="Casio fx-991cnx 科学计算器",
+                               preferred_brand="Casio", preferred_model="fx-991cnx",
+                               substitution_policy="exact_only", urgency="high")
+        first = client.post(f"/api/agent/drafts/{draft_id}/confirm", json=form)
+        second = client.post(f"/api/agent/drafts/{draft_id}/confirm", json=form)
         assert first.status_code == second.status_code == 200
         assert first.json()["id"] == second.json()["id"]
         assert first.json()["status"] == "draft"
         assert first.json()["location"] == "PQ"
+        assert first.json()["need_summary"] == "Casio fx-991cnx 科学计算器"
+        assert first.json()["preferred_brand"] == "Casio"
+        assert first.json()["preferred_model"] == "fx-991cnx"
+        assert first.json()["substitution_policy"] == "exact_only"
+        assert first.json()["urgency"] == "high"
         assert client.get(f"/api/agent/drafts/{draft_id}").json()["request_id"] == first.json()["id"]
         with app.state.session_factory() as session:
             assert session.scalar(select(func.count()).select_from(HelpRequest)) == 1
