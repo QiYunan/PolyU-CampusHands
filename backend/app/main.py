@@ -13,6 +13,7 @@ from app.database import database_url as default_database_url
 from app.database import initialize_database, make_engine, make_session_factory
 from app.demo_lock import demo_database_lock
 from app.routes import router
+from app.supply_routes import router as supply_router
 from app.agent_routes import router as agent_router
 from app.providers.config import load_config
 from app.providers.deepseek import make_deepseek
@@ -22,6 +23,7 @@ from app.providers.fallback import ProviderRouter
 from app.providers.base import LLMUnavailable
 from app.agent_tools import InvalidAgentAction
 from app.services import ClaimConflict, Forbidden, InvalidDeadline, NotFound, UnknownLocation, advance_due
+from app.supply_services import CandidatesStale, advance_supply_due
 from app.state_machine import StateConflict
 from app.realtime import ConnectionManager, EventScanner
 from app.ws_routes import configured_public_demo_origins, router as ws_router
@@ -45,6 +47,7 @@ def create_app(database_url: str | None = None, providers: ProviderRouter | None
 
     def tick() -> None:
         with session_factory() as session:
+            advance_supply_due(session)
             advance_due(session)
 
     async def timeout_loop() -> None:
@@ -89,6 +92,7 @@ def create_app(database_url: str | None = None, providers: ProviderRouter | None
     application.state.event_scanner = event_scanner
     application.state.public_demo_origins = public_demo_origins
     application.include_router(router)
+    application.include_router(supply_router)
     application.include_router(agent_router)
     application.include_router(ws_router)
 
@@ -112,6 +116,13 @@ def create_app(database_url: str | None = None, providers: ProviderRouter | None
     @application.exception_handler(ClaimConflict)
     async def already_claimed(_request, _error: ClaimConflict):
         return JSONResponse(status_code=409, content={"detail": "该请求已被其他同学接下", "code": "already_claimed"})
+
+    @application.exception_handler(CandidatesStale)
+    async def candidates_stale(_request, _error: CandidatesStale):
+        return JSONResponse(
+            status_code=409,
+            content={"detail": "候选状态已变化，请重新搜索。", "code": "candidates_stale"},
+        )
 
     @application.exception_handler(LLMUnavailable)
     async def llm_unavailable(_request, _error: LLMUnavailable):

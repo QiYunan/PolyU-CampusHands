@@ -65,3 +65,15 @@
 **AT-21 离线回归与浏览器验收。** Given 固定 Mock 配置与隔离 Demo 数据库，When执行后端全量 pytest、前端 test/lint/build、`git diff --check`、跟踪文件检查和浏览器闭环，Then Milestone 01–05 仍适用场景通过，物品／服务、原子确认、提案、并发、取消、完成和刷新流程完成，自动化不读取 `backend/.env`、不访问 DeepSeek 或 Ollama。最终三台物理设备验收另行如实记录，单机多上下文不等同于完成该项。
 
 **AT-22 临时公网拍摄。** Given Mock、隔离 Demo 数据库、显式规范 `CAMPUSHANDS_PUBLIC_DEMO_ORIGINS`、与其逐项对应的 `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS`，以及只指向 loopback Vite 5173 的 Quick Tunnel，When Alice 与 Helper 从不同网络打开同一随机 HTTPS URL，Then 首页和同源 `/api` 可用，Requester 与 Helper-board 通过保留原始 HTTPS Origin 的 WSS 完成权限校验、失效通知和 GET 对齐；未获准 Origin、错误角色或资源仍以 1008 拒绝。断开 WebSocket 后两秒轮询继续同步。停止 cloudflared 后该 URL 不可访问，本机与热点 LAN 模式不变；全程不公开 8000、11434、SQLite，不调用真实 Provider，不使用真实身份或资料。
+
+## 07 Supply-first Helper Experience
+
+**AT-23 长期资料与今日状态。** Given Helper 已保存长期物品和服务，When 次日进入应用，Then 长期资料仍存在，今日状态为空且上次选择仅作为建议；When 保存今日时间、楼栋、物品、服务和紧急偏好，Then 只有本人可读取或修改，跨用户 ID 返回 403，香港本地日期结束后旧状态不参与匹配。
+
+**AT-24 统一确定性搜索。** Given Alice 已确认同一结构化请求，When AI 助手或手动筛选调用 `POST /api/helpers/search`，Then 两者只提交 request ID 并得到相同候选。硬性条件先于排序；准确型号、准确品牌、兼容物品或服务能力、预计到达、时间余量、内部信誉、近七天任务次数和稳定 ID 按契约排序。结果不包含 Helper 精确楼栋、完整库存、原始信誉或课程表。
+
+**AT-25 邀请轮次。** Given 一至三名仍有效候选，When Alice 创建邀请，Then整批成功并进入 `awaiting_response`，但请求不出现在旧公开广场；任一候选失效时整批以 `candidates_stale` 回滚。When Alice 结束本轮，Then pending/proposed 邀请关闭、同一请求回到 `searching`，下一轮保留历史。拒绝或无法到达的 Helper 不再成为该请求候选。
+
+**AT-26 原子接受与替代物品。** Given Erin 和 Grace 同时接受同一轮邀请，When 两个事务竞争，Then恰好一个 accepted Offer 被创建，另一方得到安全 `already_claimed`，物品只预留一次且其他邀请关闭。Requester 选择兼容候选即同意该候选物品；Helper 改提另一物品时，`ask_before_substitute` 仍需 Requester 明确接受，`exact_only` 不允许不匹配物品。
+
+**AT-27 邀请实时与三设备。** Given Helper 打开“收到的邀请”，When邀请创建、拒绝、关闭、接受或过期，Then私有 WebSocket 只发失效通知，客户端 GET 对齐；断线后两秒轮询恢复。最终 Alice、Erin、Grace 必须在三台实体设备上完成今日状态、搜索、双人邀请、首位接受和其他邀请关闭，并分别复核课堂 LAN/热点与 Quick Tunnel；单机上下文不算完成。

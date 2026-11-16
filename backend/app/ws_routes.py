@@ -171,3 +171,16 @@ async def helper_board(socket: WebSocket) -> None:
     except (Forbidden, NotFound):
         raise WebSocketException(code=1008) from None
     await _listen(socket, "helper_board", actor_id)
+
+
+@router.websocket("/ws/helpers/{helper_id}/invitations")
+async def helper_invitations(socket: WebSocket, helper_id: int) -> None:
+    actor_id = _actor(socket)
+    if actor_id != helper_id:
+        raise WebSocketException(code=1008)
+    try:
+        with socket.app.state.session_factory() as session:
+            get_helper_for_actor(session, actor_id)
+    except (Forbidden, NotFound):
+        raise WebSocketException(code=1008) from None
+    await _listen(socket, "invitation", helper_id)

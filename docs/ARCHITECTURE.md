@@ -52,6 +52,10 @@
 | 06 | `GET /api/locations`, `GET /api/demo/roles`, `PATCH /api/requests/{id}`, `POST /api/requests/{id}/publish` | 地点与虚构角色选项；Requester 更正并发布。旧 `/search` 保留为发布语义兼容入口。 |
 | 06 | `GET /api/helper-board`, `POST /api/requests/{id}/claim`, `/dismiss`, `/restore`, `WS /ws/helper-board?demo_user_id={id}` | 所有 Helper 读取同一开放广场；claim 提交能力确认、说明及可选实际品牌／型号；WebSocket 仅通知变化。 |
 | 06 | `POST /api/offers/{id}/accept-proposal`, `POST /api/offers/{id}/decline-proposal` | 仅 Requester 接受或拒绝具体替代提案；接受时原子产生唯一匹配。 |
+| 07 | `GET/PUT /api/demo/users/{id}/helper-profile`, `GET/PUT /api/demo/users/{id}/daily-availability` | Helper 私有的长期供给资料和香港本地“今日状态”。 |
+| 07 | `POST /api/helpers/search`, `POST/GET /api/requests/{id}/invitations`, `POST /api/requests/{id}/invitations/close` | AI 与手动页面共用确定性搜索；Requester 创建、查看和结束邀请轮次。 |
+| 07 | `GET /api/helpers/{id}/invitations`, `POST /api/invitations/{id}/accept|decline|propose-substitute` | Helper 私有邀请收件箱及受控响应。 |
+| 07 | `WS /ws/helpers/{id}/invitations` | 邀请变化失效通知；GET 快照和两秒轮询保持权威。 |
 
 `/start` 在已匹配后记录开始交接；`/complete` 记录 Requester 的确认；只有对应 Helper 也确认后，服务层才可进入 `completed`。原始清单缺少开始交接与 Helper 确认接口，因此在此补充。第一阶段请求输入为结构化字段；第三阶段增加自然语言解析入口时保持服务层的请求创建规则一致。具体输入输出 schema 在实现该阶段时确定。
 
@@ -66,6 +70,8 @@ Quick Tunnel 模式只把 `http://127.0.0.1:5173` 交给本机 `cloudflared`；F
 第五阶段在 `AgentRunRead` 中增加 `validated_actions`：仅列出经本地 schema 校验且已交给确定性服务执行的受控工具名称，不包含参数、原始模型响应或推理。`/api/system/llm-status` 的 `active` 只代表本次成功的模型调用；尚未调用或本次双 provider 失败时为 `null`。`unknown` 表示尚未调用，不能当作可用性证明。Demo reset 固定作用于 `backend/.demo/campushands.db`，与默认开发数据库隔离；Demo 后端在运行时持有进程锁，reset 遇到占用即拒绝。操作与两阶段 preflight 见 [演示手册](DEMO_RUNBOOK.md)。
 
 第六阶段继续使用版本化离线地点 registry 与别名，只标准化 Requester 的交接地点。旧步行图与估算分钟可为历史数据兼容保留，但不参与新广场显示、排序或认领资格，也不是导航。地点依据 [PolyU Campus Map](https://www.polyu.edu.hk/cdo/docdrive/Useful%20Information/CampusMap.pdf) 与 [Campus Access](https://www.polyu.edu.hk/cfso/informationhub/access-to-campus-and-premises/)；项目不声称实时通行保证。广场 API 不返回预设库存、Helper 地点、availability、步行分钟或信誉；Requester 事件也不保存这些内部数据。
+
+第七阶段新增 `UserServiceCapability`、`DailyAvailability` 及其今日物品／服务关联、`InvitationBatch` 和 `HelpInvitation`。定向邀请与旧 `HelpOffer` 分离；只有成功接受后才创建 accepted Offer，因此多轮邀请历史不会破坏 M06 的 Offer 兼容约束。搜索先应用今日状态、能力、可达性、紧急偏好、活动任务和拒绝历史等硬条件，再做稳定词典序排序。Requester 只看到请求相关理由、预计到达和等级化信誉；Helper 的楼栋、完整库存和原始分数不跨越 API 或 WebSocket。旧公开广场只识别 `request_published` 事件，M07 `invitations_sent` 不会使定向请求进入该广场。
 
 ## 安全边界
 

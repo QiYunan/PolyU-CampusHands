@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models import AgentEvent, HelpOffer, HelpRequest
+from app.models import AgentEvent, HelpInvitation, HelpOffer, HelpRequest
 from app.schemas import as_utc
 
 
@@ -15,7 +15,7 @@ class RealtimeNotice(BaseModel):
     version: Literal[1] = 1
     event_id: int = Field(gt=0)
     event_type: str = Field(min_length=1, max_length=64)
-    resource_kind: Literal["request", "offer", "helper_board"]
+    resource_kind: Literal["request", "offer", "helper_board", "invitation"]
     resource_id: int = Field(gt=0)
     status: str = Field(min_length=1, max_length=32)
     public_message: str = Field(max_length=300)
@@ -48,5 +48,19 @@ def board_notice(event: AgentEvent, helper_id: int) -> RealtimeNotice:
         event_id=event.id, event_type="board_changed",
         resource_kind="helper_board", resource_id=helper_id,
         status="changed", public_message="求助广场已更新",
+        created_at=as_utc(event.created_at),
+    )
+
+
+def invitation_notice(event: AgentEvent, invitation: HelpInvitation) -> RealtimeNotice:
+    """Invalidation only; the authorized HTTP inbox supplies invitation facts."""
+
+    return RealtimeNotice(
+        event_id=event.id,
+        event_type="invitations_changed",
+        resource_kind="invitation",
+        resource_id=invitation.helper_id,
+        status="changed",
+        public_message="邀请状态已更新",
         created_at=as_utc(event.created_at),
     )

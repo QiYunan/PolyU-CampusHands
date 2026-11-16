@@ -119,6 +119,8 @@ def initialize_database(engine) -> None:
             "offered_brand": "VARCHAR(80)",
             "offered_model": "VARCHAR(80)",
             "capability_confirmed_at": "DATETIME",
+            "invitation_id": "INTEGER",
+            "service_capability_id": "INTEGER",
         },
         "help_requests": {
             "category": "VARCHAR(32) DEFAULT 'borrow'",
@@ -128,6 +130,8 @@ def initialize_database(engine) -> None:
             "preferred_model": "VARCHAR(80)",
             "substitution_policy": "VARCHAR(32)",
             "matching_issue": "VARCHAR(64)",
+            "service_code": "VARCHAR(32)",
+            "service_name": "VARCHAR(120)",
         },
         "help_request_drafts": {
             "category": "VARCHAR(32) DEFAULT 'borrow'",
@@ -136,8 +140,14 @@ def initialize_database(engine) -> None:
             "preferred_brand": "VARCHAR(80)",
             "preferred_model": "VARCHAR(80)",
             "substitution_policy": "VARCHAR(32)",
+            "service_code": "VARCHAR(32)",
+            "service_name": "VARCHAR(120)",
         },
-        "user_items": {"brand": "VARCHAR(80)", "model": "VARCHAR(80)"},
+        "user_items": {
+            "brand": "VARCHAR(80)",
+            "model": "VARCHAR(80)",
+            "is_active": "BOOLEAN DEFAULT 1",
+        },
     }
     with engine.connect() as connection:
         try:
@@ -194,6 +204,15 @@ def initialize_database(engine) -> None:
                 "UPDATE help_offers SET capability_confirmed_at = COALESCE(responded_at, sent_at) "
                 "WHERE capability_confirmed_at IS NULL AND status IN ('accepted', 'proposed')"
             )
+            connection.exec_driver_sql(
+                "UPDATE user_items SET is_active = 1 WHERE is_active IS NULL"
+            )
+            for table in ("help_requests", "help_request_drafts"):
+                connection.exec_driver_sql(
+                    f"UPDATE {table} SET service_code = 'other', "
+                    "service_name = COALESCE(NULLIF(TRIM(need_summary), ''), '校园服务') "
+                    "WHERE category = 'service' AND service_code IS NULL"
+                )
             # Claim writes run under BEGIN IMMEDIATE. These partial indexes also
             # defend the invariant if a future caller bypasses the service.
             if engine.dialect.name == "sqlite":
@@ -204,6 +223,14 @@ def initialize_database(engine) -> None:
                 connection.exec_driver_sql(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_accepted_offer_item "
                     "ON help_offers (item_id) WHERE status = 'accepted' AND item_id IS NOT NULL"
+                )
+                connection.exec_driver_sql(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_help_offer_invitation "
+                    "ON help_offers (invitation_id) WHERE invitation_id IS NOT NULL"
+                )
+                connection.exec_driver_sql(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_open_invitation_batch "
+                    "ON invitation_batches (request_id) WHERE status = 'open'"
                 )
             connection.commit()
         except Exception:

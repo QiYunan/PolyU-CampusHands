@@ -1,8 +1,8 @@
 """Milestone 01 persistent entities."""
 
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base, utc_now_naive
@@ -30,6 +30,8 @@ class HelpRequest(Base):
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     need_summary: Mapped[str] = mapped_column(String(200), nullable=False, default="校园求助")
     item_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    service_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    service_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     preferred_brand: Mapped[str | None] = mapped_column(String(80), nullable=True)
     preferred_model: Mapped[str | None] = mapped_column(String(80), nullable=True)
     substitution_policy: Mapped[str | None] = mapped_column(String(32), nullable=True, default="equivalent_ok")
@@ -54,6 +56,8 @@ class HelpRequestDraft(Base):
     category: Mapped[str] = mapped_column(String(32), nullable=False, default="borrow")
     need_summary: Mapped[str | None] = mapped_column(String(200), nullable=True)
     item_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    service_code: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    service_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     preferred_brand: Mapped[str | None] = mapped_column(String(80), nullable=True)
     preferred_model: Mapped[str | None] = mapped_column(String(80), nullable=True)
     substitution_policy: Mapped[str | None] = mapped_column(String(32), nullable=True, default="equivalent_ok")
@@ -79,6 +83,7 @@ class UserItem(Base):
     item_name: Mapped[str] = mapped_column(String(120), nullable=False)
     brand: Mapped[str | None] = mapped_column(String(80), nullable=True)
     model: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     owner: Mapped[User] = relationship(back_populates="items")
 
@@ -90,7 +95,9 @@ class HelpOffer(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     request_id: Mapped[int] = mapped_column(ForeignKey("help_requests.id"), nullable=False)
     helper_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    invitation_id: Mapped[int | None] = mapped_column(ForeignKey("help_invitations.id"), nullable=True)
     item_id: Mapped[int | None] = mapped_column(ForeignKey("user_items.id"), nullable=True)
+    service_capability_id: Mapped[int | None] = mapped_column(ForeignKey("user_service_capabilities.id"), nullable=True)
     message: Mapped[str | None] = mapped_column(String(300), nullable=True)
     response_type: Mapped[str] = mapped_column(String(32), nullable=False, default="direct")
     help_note: Mapped[str | None] = mapped_column(String(300), nullable=True)
@@ -131,3 +138,88 @@ class RequestDismissal(Base):
     request_id: Mapped[int] = mapped_column(ForeignKey("help_requests.id"), nullable=False)
     helper_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now_naive)
+
+
+class UserServiceCapability(Base):
+    __tablename__ = "user_service_capabilities"
+    __table_args__ = (UniqueConstraint("user_id", "service_code", "service_name", name="uq_user_service_capability"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    service_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    service_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now_naive)
+
+
+class DailyAvailability(Base):
+    __tablename__ = "daily_availability"
+    __table_args__ = (UniqueConstraint("user_id", "local_date", name="uq_daily_availability_user_date"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    local_date: Mapped[date] = mapped_column(Date, nullable=False)
+    willing: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    available_from: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    available_until: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    campus_building: Mapped[str] = mapped_column(String(80), nullable=False)
+    accepts_urgent: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
+
+
+class DailyAvailableItem(Base):
+    __tablename__ = "daily_available_items"
+    __table_args__ = (UniqueConstraint("daily_availability_id", "item_id", name="uq_daily_available_item"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    daily_availability_id: Mapped[int] = mapped_column(ForeignKey("daily_availability.id"), nullable=False)
+    item_id: Mapped[int] = mapped_column(ForeignKey("user_items.id"), nullable=False)
+
+
+class DailyAvailableService(Base):
+    __tablename__ = "daily_available_services"
+    __table_args__ = (UniqueConstraint("daily_availability_id", "service_id", name="uq_daily_available_service"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    daily_availability_id: Mapped[int] = mapped_column(ForeignKey("daily_availability.id"), nullable=False)
+    service_id: Mapped[int] = mapped_column(ForeignKey("user_service_capabilities.id"), nullable=False)
+
+
+class InvitationBatch(Base):
+    __tablename__ = "invitation_batches"
+    __table_args__ = (UniqueConstraint("request_id", "round_number", name="uq_invitation_batch_round"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    request_id: Mapped[int] = mapped_column(ForeignKey("help_requests.id"), nullable=False)
+    round_number: Mapped[int] = mapped_column(nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now_naive)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class HelpInvitation(Base):
+    __tablename__ = "help_invitations"
+    __table_args__ = (UniqueConstraint("batch_id", "helper_id", name="uq_invitation_batch_helper"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    batch_id: Mapped[int] = mapped_column(ForeignKey("invitation_batches.id"), nullable=False)
+    request_id: Mapped[int] = mapped_column(ForeignKey("help_requests.id"), nullable=False)
+    helper_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    candidate_item_id: Mapped[int | None] = mapped_column(ForeignKey("user_items.id"), nullable=True)
+    candidate_service_id: Mapped[int | None] = mapped_column(ForeignKey("user_service_capabilities.id"), nullable=True)
+    proposed_item_id: Mapped[int | None] = mapped_column(ForeignKey("user_items.id"), nullable=True)
+    match_reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    response_type: Mapped[str] = mapped_column(String(32), nullable=False, default="direct")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    decline_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    note: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    sent_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now_naive)
+    responded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    request: Mapped[HelpRequest] = relationship()
+    helper: Mapped[User] = relationship()
+    candidate_item: Mapped[UserItem | None] = relationship(foreign_keys=[candidate_item_id])
+    proposed_item: Mapped[UserItem | None] = relationship(foreign_keys=[proposed_item_id])
+    candidate_service: Mapped[UserServiceCapability | None] = relationship(foreign_keys=[candidate_service_id])
+    batch: Mapped[InvitationBatch] = relationship()

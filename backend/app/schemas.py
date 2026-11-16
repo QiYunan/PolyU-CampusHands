@@ -35,6 +35,13 @@ class SubstitutionPolicy(str, Enum):
     equivalent_ok = "equivalent_ok"
 
 
+class ServiceCode(str, Enum):
+    moving = "moving"
+    printing = "printing"
+    tutoring = "tutoring"
+    other = "other"
+
+
 class MatchingIssue(str, Enum):
     unknown_location = "unknown_location"
     no_item_inventory = "no_item_inventory"
@@ -57,6 +64,8 @@ class RequestCreate(BaseModel):
     category: Literal["borrow", "service"] = "borrow"
     need_summary: str = Field(min_length=1, max_length=200)
     item_type: ItemType = ItemType.other
+    service_code: ServiceCode | None = None
+    service_name: str | None = Field(default=None, max_length=120)
     location: str = Field(min_length=1, max_length=80)
     deadline: datetime
     urgency: Literal["normal", "high"] = "normal"
@@ -86,9 +95,14 @@ class RequestCreate(BaseModel):
     def category_rules(self):
         if self.category == "service":
             self.item_type = ItemType.other
+            self.service_code = self.service_code or ServiceCode.other
+            self.service_name = clean_preference(self.service_name) or self.need_summary
             self.preferred_brand = None
             self.preferred_model = None
             self.substitution_policy = SubstitutionPolicy.equivalent_ok
+        else:
+            self.service_code = None
+            self.service_name = None
         return self
 
     @field_validator("need_summary", mode="before")
@@ -96,7 +110,7 @@ class RequestCreate(BaseModel):
     def normalize_summary(cls, value):
         return " ".join(unicodedata.normalize("NFKC", value).split()) if isinstance(value, str) else value
 
-    @field_validator("preferred_brand", "preferred_model", mode="before")
+    @field_validator("preferred_brand", "preferred_model", "service_name", mode="before")
     @classmethod
     def normalize_preference(cls, value):
         return clean_preference(value) if isinstance(value, str) or value is None else value
@@ -159,6 +173,8 @@ class RequestRead(BaseModel):
     raw_text: str | None
     need_summary: str
     item_type: ItemType
+    service_code: ServiceCode | None = None
+    service_name: str | None = None
     preferred_brand: str | None = None
     preferred_model: str | None = None
     substitution_policy: SubstitutionPolicy
@@ -189,6 +205,8 @@ class RequestRead(BaseModel):
             raw_text=record.raw_text,
             need_summary=record.need_summary,
             item_type=record.item_type,
+            service_code=record.service_code,
+            service_name=record.service_name,
             preferred_brand=record.preferred_brand,
             preferred_model=record.preferred_model,
             substitution_policy=record.substitution_policy,

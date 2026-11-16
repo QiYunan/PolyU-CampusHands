@@ -167,6 +167,8 @@ def create_request(session: Session, data: RequestCreate, actor_id: int = ALICE_
         raw_text=public_text(data.raw_text) if data.raw_text else None,
         need_summary=public_text(data.need_summary),
         item_type=_enum_value(data.item_type) if data.item_type is not None else "other",
+        service_code=_enum_value(data.service_code) if data.service_code is not None else None,
+        service_name=data.service_name,
         preferred_brand=data.preferred_brand if is_borrow else None,
         preferred_model=data.preferred_model if is_borrow else None,
         substitution_policy=_enum_value(policy),
@@ -534,6 +536,8 @@ def start_handoff(session: Session, request_id: int, actor_id: int) -> HelpReque
 
 def _finish_if_confirmed(session: Session, offer: HelpOffer) -> None:
     if offer.requester_confirmed_at is not None and offer.helper_confirmed_at is not None:
+        if offer.item is not None:
+            offer.item.available = True
         transition(offer.request, "completed")
         _event(session, offer.request, "request_completed", "双方已确认，请求完成")
 

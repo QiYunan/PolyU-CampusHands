@@ -8,8 +8,8 @@ from fastapi import WebSocket
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.models import AgentEvent, HelpOffer, HelpRequest
-from app.realtime_schemas import RealtimeNotice, board_notice, offer_notice, request_notice
+from app.models import AgentEvent, HelpInvitation, HelpOffer, HelpRequest
+from app.realtime_schemas import RealtimeNotice, board_notice, invitation_notice, offer_notice, request_notice
 
 
 logger = logging.getLogger(__name__)
@@ -111,11 +111,20 @@ class EventScanner:
                 request_frame = request_notice(event, request)
                 offers = session.scalars(select(HelpOffer).where(HelpOffer.request_id == request.id).order_by(HelpOffer.id)).all()
                 helper_frames = [(offer.helper_id, offer_notice(event, offer)) for offer in offers]
+                invitations = session.scalars(select(HelpInvitation).where(
+                    HelpInvitation.request_id == request.id,
+                ).order_by(HelpInvitation.id)).all()
+                invitation_frames = [
+                    (invitation.helper_id, invitation_notice(event, invitation))
+                    for invitation in invitations
+                ]
                 # All reads and serialization complete before any client receives
                 # this event; only per-client failures are isolated by the manager.
                 self.manager.publish("request", request.id, request_frame)
                 for helper_id, frame in helper_frames:
                     self.manager.publish("helper", helper_id, frame)
+                for helper_id, frame in invitation_frames:
+                    self.manager.publish("invitation", helper_id, frame)
                 if event.event_type in BOARD_EVENTS:
                     published = event.event_type == "request_published" or session.scalar(select(AgentEvent.id).where(
                         AgentEvent.request_id == request.id,
