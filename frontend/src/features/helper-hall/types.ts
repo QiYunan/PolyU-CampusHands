@@ -8,6 +8,7 @@ export type ProfileItem = {
   brand: string | null;
   model: string | null;
   active: boolean;
+  available?: boolean;
 };
 
 export type ProfileService = {
@@ -19,7 +20,7 @@ export type ProfileService = {
 
 export type HelperProfile = {
   user_id: number;
-  items: Array<ProfileItem & { id: number }>;
+  items: Array<ProfileItem & { id: number; available: boolean }>;
   services: Array<ProfileService & { id: number }>;
 };
 
@@ -51,6 +52,7 @@ export type Invitation = {
   helper_name: string;
   requester_name: string;
   category: "borrow" | "service";
+  request_item_type: ItemType;
   need_summary: string;
   location: string;
   deadline: string;

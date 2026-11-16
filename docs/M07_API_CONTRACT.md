@@ -38,7 +38,8 @@
       "item_name": "Casio fx-991CN X",
       "brand": "Casio",
       "model": "fx-991CN X",
-      "active": true
+      "active": true,
+      "available": true
     }
   ],
   "services": [
@@ -54,7 +55,7 @@
 
 ### `PUT /api/demo/users/{user_id}/helper-profile`
 
-请求体与上述 `items`、`services` 数组相同；新记录省略 `id`。这是完整快照更新：遗漏的旧记录软停用，已被历史记录引用的数据不删除。
+请求体与上述 `items`、`services` 数组相同，但省略只读的 `available`；新记录同时省略 `id`。这是完整快照更新：遗漏的旧记录软停用，已被历史记录引用的数据不删除。
 
 ## Daily availability
 
@@ -81,7 +82,7 @@
 
 ### `PUT /api/demo/users/{user_id}/daily-availability`
 
-请求体为 `availability` 对象。起止时间必须属于香港本地的同一“今日”，且开始早于结束；物品和服务 ID 必须属于当前 Helper 的有效长期资料。
+请求体为 `availability` 对象。起止时间必须属于香港本地的同一“今日”，且开始早于结束；物品和服务 ID 必须属于当前 Helper 的有效长期资料，物品还必须处于 `available=true`。昨日清单建议只包含仍属于该 Helper、未被软停用且当前可用的物品或有效服务 ID；客户端应用建议时必须再次与最新有效资料取交集。
 
 ## Deterministic Helper search
 
@@ -110,14 +111,27 @@
       "available_from": "2026-11-16T14:00:00+08:00",
       "available_until": "2026-11-16T18:00:00+08:00",
       "reliability_level": "A",
-      "is_substitute": false
+      "is_substitute": false,
+      "item_name": "Casio fx-991CN X",
+      "item_brand": "Casio",
+      "item_model": "fx-991CN X"
     }
   ],
   "issue": null
 }
 ```
 
-`match_reason` 为 `exact_model | exact_brand | compatible | service_exact`。无候选时返回空数组和稳定的 request-level `issue`，不得返回被过滤的 Helper 信息。
+`match_reason` 为 `exact_model | exact_brand | compatible | service_exact`。物品候选只返回本次实际匹配物品的安全名称、品牌和型号，不返回物品 ID 或 Helper 的其他库存；服务候选的三个物品字段均为 `null`。候选可达性必须同时满足预计到达时间不晚于请求截止时间且不晚于 Helper 今日可帮助结束时间，不要求可帮助结束时间覆盖整个请求截止时间。无候选时返回空数组和稳定的 request-level `issue`，不得返回被过滤的 Helper 信息。
+
+M07 业务冲突的稳定 `409 code` 至少包括：
+
+- `invitation_round_open`
+- `no_open_round`
+- `invitation_inactive`
+- `request_not_searchable`
+- `substitute_not_allowed`
+- `candidates_stale`
+- `already_claimed`
 
 ## Invitation rounds
 
@@ -141,7 +155,7 @@ Requester 查看当前轮次和历史邀请。
 
 ### `GET /api/helpers/{helper_id}/invitations`
 
-仅本人可读取。返回 `pending`、`active` 和 `history` 三个数组。每项只包含该 Helper 自己获邀所需的请求、候选物品或服务及状态。
+仅本人可读取。返回 `pending`、`active` 和 `history` 三个数组。每项只包含该 Helper 自己获邀所需的请求、`request_item_type`、候选物品或服务及状态。替代物品下拉框必须取 Helper 私有资料中 `active=true`、`available=true`、属于今日 `item_ids` 且类型等于 `request_item_type` 的交集。
 
 ### Invitation actions
 

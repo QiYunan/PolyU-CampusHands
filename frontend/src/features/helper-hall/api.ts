@@ -50,7 +50,12 @@ export function saveHelperProfile(helperId: number, items: ProfileItem[], servic
   return request(`/api/demo/users/${helperId}/helper-profile`, {
     method: "PUT",
     headers: helperHeaders(helperId, true),
-    body: JSON.stringify({ items, services }),
+    body: JSON.stringify({
+      items: items.map(({ id, item_type, item_name, brand, model, active }) => ({
+        id, item_type, item_name, brand, model, active,
+      })),
+      services,
+    }),
   });
 }
 

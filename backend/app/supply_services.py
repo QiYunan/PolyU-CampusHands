@@ -56,8 +56,15 @@ from app.supply_schemas import (
 )
 
 
-class CandidatesStale(StateConflict):
-    pass
+class SupplyConflict(StateConflict):
+    def __init__(self, message: str, code: str):
+        super().__init__(message)
+        self.code = code
+
+
+class CandidatesStale(SupplyConflict):
+    def __init__(self, message: str = "候选状态已变化，请重新搜索。"):
+        super().__init__(message, "candidates_stale")
 
 
 def _require_request(session: Session, request_id: int) -> HelpRequest:
@@ -92,7 +99,7 @@ def _profile_view(session: Session, user_id: int) -> HelperProfileRead:
         user_id=user_id,
         items=[ProfileItemRead(
             id=item.id, item_type=item.item_type, item_name=item.item_name,
-            brand=item.brand, model=item.model, active=item.is_active,
+            brand=item.brand, model=item.model, active=item.is_active, available=item.available,
         ) for item in items],
         services=[ProfileServiceRead(
             id=service.id, service_code=service.service_code,
@@ -132,7 +139,7 @@ def update_helper_profile(
         for value in payload.items:
             key = (value.item_type.value, value.item_name.casefold())
             if key in item_keys:
-                raise StateConflict("长期物品不能重复")
+                raise SupplyConflict("长期物品不能重复", "duplicate_capability")
             item_keys.add(key)
             if value.id is None:
                 item = UserItem(user_id=user_id, item_type=value.item_type.value, item_name=value.item_name)
@@ -153,7 +160,7 @@ def update_helper_profile(
         for value in payload.services:
             key = (value.service_code.value, value.service_name.casefold())
             if key in service_keys:
-                raise StateConflict("长期服务不能重复")
+                raise SupplyConflict("长期服务不能重复", "duplicate_capability")
             service_keys.add(key)
             if value.id is None:
                 service = UserServiceCapability(
@@ -192,6 +199,31 @@ def _daily_ids(session: Session, daily_id: int) -> tuple[list[int], list[int]]:
     return item_ids, service_ids
 
 
+def _valid_daily_ids(session: Session, daily_id: int, user_id: int) -> tuple[list[int], list[int]]:
+    item_ids = list(session.scalars(
+        select(UserItem.id)
+        .join(DailyAvailableItem, DailyAvailableItem.item_id == UserItem.id)
+        .where(
+            DailyAvailableItem.daily_availability_id == daily_id,
+            UserItem.user_id == user_id,
+            UserItem.is_active.is_(True),
+            UserItem.available.is_(True),
+        )
+        .order_by(UserItem.id)
+    ).all())
+    service_ids = list(session.scalars(
+        select(UserServiceCapability.id)
+        .join(DailyAvailableService, DailyAvailableService.service_id == UserServiceCapability.id)
+        .where(
+            DailyAvailableService.daily_availability_id == daily_id,
+            UserServiceCapability.user_id == user_id,
+            UserServiceCapability.active.is_(True),
+        )
+        .order_by(UserServiceCapability.id)
+    ).all())
+    return item_ids, service_ids
+
+
 def get_daily_availability(
     session: Session,
     user_id: int,
@@ -210,7 +242,9 @@ def get_daily_availability(
         DailyAvailability.user_id == user_id,
         DailyAvailability.local_date < local_date,
     ).order_by(DailyAvailability.local_date.desc(), DailyAvailability.id.desc()))
-    suggested_items, suggested_services = _daily_ids(session, previous.id) if previous else ([], [])
+    suggested_items, suggested_services = (
+        _valid_daily_ids(session, previous.id, user_id) if previous else ([], [])
+    )
     availability = None
     if current is not None:
         item_ids, service_ids = _daily_ids(session, current.id)
@@ -244,10 +278,10 @@ def update_daily_availability(
     start_hk = payload.available_from.astimezone(HONG_KONG)
     end_hk = payload.available_until.astimezone(HONG_KONG)
     if start_hk.date() != local_date or end_hk.date() != local_date:
-        raise StateConflict("今日状态的起止时间必须属于香港本地的今天")
+        raise SupplyConflict("今日状态的起止时间必须属于香港本地的今天", "invalid_daily_availability")
     building = normalize_location(payload.campus_building)
     if building is None:
-        raise StateConflict("请选择主校园内可识别的楼栋")
+        raise SupplyConflict("请选择主校园内可识别的楼栋", "invalid_daily_availability")
 
     with write_transaction(session):
         get_helper_for_actor(session, actor_id)
@@ -255,7 +289,9 @@ def update_daily_availability(
         services = session.scalars(select(UserServiceCapability).where(
             UserServiceCapability.id.in_(payload.service_ids)
         )).all() if payload.service_ids else []
-        if len(items) != len(payload.item_ids) or any(item.user_id != user_id or not item.is_active for item in items):
+        if len(items) != len(payload.item_ids) or any(
+            item.user_id != user_id or not item.is_active or not item.available for item in items
+        ):
             raise Forbidden("Today item selection contains an unavailable item")
         if len(services) != len(payload.service_ids) or any(
             service.user_id != user_id or not service.active for service in services
@@ -300,9 +336,9 @@ def search_helpers(
     request = _require_request(session, request_id)
     _require_requester(request, actor_id)
     if request.status not in {"draft", "searching"}:
-        raise StateConflict("Request is not available for a new Helper search")
+        raise SupplyConflict("Request is not available for a new Helper search", "request_not_searchable")
     if request.deadline <= current:
-        raise StateConflict("Request deadline has passed")
+        raise SupplyConflict("Request deadline has passed", "request_not_searchable")
     result = search_supply_candidates(session, request, current)
     return HelperSearchRead(
         request_id=request.id,
@@ -316,6 +352,9 @@ def search_helpers(
             available_until=as_utc(candidate.availability.available_until),
             reliability_level=reliability_level(candidate.helper.reliability_score),
             is_substitute=candidate.is_substitute,
+            item_name=public_text(candidate.item.item_name) if candidate.item else None,
+            item_brand=public_text(candidate.item.brand) if candidate.item and candidate.item.brand else None,
+            item_model=public_text(candidate.item.model) if candidate.item and candidate.item.model else None,
         ) for candidate in result.candidates[:limit]],
         issue=result.issue,
     )
@@ -332,14 +371,14 @@ def create_invitations(
     with write_transaction(session):
         request = _require_request(session, request_id)
         _require_requester(request, actor_id)
-        if request.status not in {"draft", "searching"} or request.deadline <= current:
-            raise StateConflict("Request is not available for invitations")
         open_batch = session.scalar(select(InvitationBatch).where(
             InvitationBatch.request_id == request.id,
             InvitationBatch.status == "open",
         ))
         if open_batch is not None:
-            raise StateConflict("Close the current invitation round first")
+            raise SupplyConflict("Close the current invitation round first", "invitation_round_open")
+        if request.status not in {"draft", "searching"} or request.deadline <= current:
+            raise SupplyConflict("Request is not available for invitations", "request_not_searchable")
         result = search_supply_candidates(session, request, current)
         candidates = {candidate.helper.id: candidate for candidate in result.candidates}
         if any(helper_id not in candidates for helper_id in helper_ids):
@@ -386,6 +425,7 @@ def _invitation_view(session: Session, invitation: HelpInvitation) -> Invitation
         helper_name=invitation.helper.display_name,
         requester_name=invitation.request.requester.display_name,
         category=invitation.request.category,
+        request_item_type=invitation.request.item_type,
         need_summary=invitation.request.need_summary,
         location=invitation.request.location,
         deadline=as_utc(invitation.request.deadline),
@@ -512,9 +552,9 @@ def _accept_locked(
     if accepted is not None:
         raise ClaimConflict("Request already matched")
     if invitation.status not in {"pending", "proposed"} or invitation.batch.status != "open":
-        raise StateConflict("Invitation is no longer active")
+        raise SupplyConflict("Invitation is no longer active", "invitation_inactive")
     if invitation.request.status != "awaiting_response" or invitation.request.deadline <= current:
-        raise StateConflict("Request is no longer accepting invitations")
+        raise SupplyConflict("Request is no longer accepting invitations", "request_not_searchable")
     target_item = item or invitation.proposed_item or invitation.candidate_item
     if not _capability_is_valid(session, invitation, current, target_item):
         raise CandidatesStale("候选状态已变化，请重新搜索。")
@@ -592,7 +632,7 @@ def decline_invitation(
         if invitation.status == "declined" and invitation.decline_reason == reason:
             return invitation
         if invitation.status not in {"pending", "proposed"} or invitation.batch.status != "open":
-            raise StateConflict("Invitation is no longer active")
+            raise SupplyConflict("Invitation is no longer active", "invitation_inactive")
         invitation.status = "declined"
         invitation.decline_reason = reason
         invitation.responded_at = current
@@ -613,14 +653,14 @@ def propose_substitute(
         if invitation.helper_id != actor_id:
             raise Forbidden("Invitation belongs to another Helper")
         if invitation.request.category != "borrow" or invitation.status != "pending":
-            raise StateConflict("This invitation cannot receive a substitute")
+            raise SupplyConflict("This invitation cannot receive a substitute", "substitute_not_allowed")
         item = session.get(UserItem, payload.item_id)
         if item is None or not _capability_is_valid(session, invitation, current, item):
             raise CandidatesStale("候选状态已变化，请重新搜索。")
         if invitation.request.substitution_policy == "exact_only" and not offered_item_matches(
             invitation.request, item.brand, item.model,
         ):
-            raise StateConflict("The request accepts only the exact preference")
+            raise SupplyConflict("The request accepts only the exact preference", "substitute_not_allowed")
         invitation.proposed_item_id = item.id
         invitation.note = public_text(payload.note) if payload.note else None
         invitation.response_type = "substitute"
@@ -646,7 +686,7 @@ def accept_invitation_substitute(
         invitation = _require_invitation(session, invitation_id)
         _require_requester(invitation.request, actor_id)
         if invitation.status != "proposed" or invitation.proposed_item is None:
-            raise StateConflict("Substitute proposal is no longer active")
+            raise SupplyConflict("Substitute proposal is no longer active", "invitation_inactive")
         invitation.candidate_item_id = invitation.proposed_item_id
         invitation.match_reason = "compatible"
         invitation.response_type = "substitute"
@@ -664,7 +704,7 @@ def decline_invitation_substitute(
         invitation = _require_invitation(session, invitation_id)
         _require_requester(invitation.request, actor_id)
         if invitation.status != "proposed":
-            raise StateConflict("Substitute proposal is no longer active")
+            raise SupplyConflict("Substitute proposal is no longer active", "invitation_inactive")
         invitation.status = "declined"
         invitation.decline_reason = "substitute_declined"
         invitation.responded_at = current
@@ -687,9 +727,9 @@ def close_invitation_round(
             InvitationBatch.status == "open",
         ))
         if batch is None:
-            raise StateConflict("No open invitation round")
+            raise SupplyConflict("No open invitation round", "no_open_round")
         if request.status != "awaiting_response":
-            raise StateConflict("Request is no longer awaiting invitations")
+            raise SupplyConflict("Request is no longer awaiting invitations", "invitation_inactive")
         for invitation in session.scalars(select(HelpInvitation).where(
             HelpInvitation.batch_id == batch.id,
             HelpInvitation.status.in_(("pending", "proposed")),

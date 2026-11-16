@@ -77,14 +77,16 @@ export function TodayStatusPanel({ actorId }: { actorId: number }) {
         setServices(nextProfile.services);
         setDaily(nextDaily);
         setLocations(nextLocations);
+        const activeItemIds = new Set(nextProfile.items.filter((item) => item.active && item.available).map((item) => item.id));
+        const activeServiceIds = new Set(nextProfile.services.filter((service) => service.active).map((service) => service.id));
         if (nextDaily.availability) {
           setWilling(nextDaily.availability.willing);
           setAvailableFrom(localInput(nextDaily.availability.available_from));
           setAvailableUntil(localInput(nextDaily.availability.available_until));
           setBuilding(nextDaily.availability.campus_building);
           setAcceptsUrgent(nextDaily.availability.accepts_urgent);
-          setSelectedItems(nextDaily.availability.item_ids);
-          setSelectedServices(nextDaily.availability.service_ids);
+          setSelectedItems(nextDaily.availability.item_ids.filter((id) => activeItemIds.has(id)));
+          setSelectedServices(nextDaily.availability.service_ids.filter((id) => activeServiceIds.has(id)));
         }
       })
       .catch((cause) => { if (active) setError(cause instanceof Error ? cause.message : "读取状态失败"); });
@@ -110,6 +112,10 @@ export function TodayStatusPanel({ actorId }: { actorId: number }) {
       setProfile(saved);
       setItems(saved.items);
       setServices(saved.services);
+      const activeItemIds = new Set(saved.items.filter((item) => item.active && item.available).map((item) => item.id));
+      const activeServiceIds = new Set(saved.services.filter((service) => service.active).map((service) => service.id));
+      setSelectedItems((current) => current.filter((id) => activeItemIds.has(id)));
+      setSelectedServices((current) => current.filter((id) => activeServiceIds.has(id)));
       setNotice("长期物品与服务能力已保存。");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "保存长期资料失败");
@@ -195,10 +201,12 @@ export function TodayStatusPanel({ actorId }: { actorId: number }) {
       </div>
       <label className="helper-inline-check"><input type="checkbox" checked={acceptsUrgent} onChange={(event) => setAcceptsUrgent(event.target.checked)} />接受紧急请求</label>
       {(daily.suggested_item_ids.length > 0 || daily.suggested_service_ids.length > 0) && <button type="button" className="helper-secondary" onClick={() => {
-        setSelectedItems(daily.suggested_item_ids);
-        setSelectedServices(daily.suggested_service_ids);
+        const activeItemIds = new Set(profile.items.filter((item) => item.active && item.available).map((item) => item.id));
+        const activeServiceIds = new Set(profile.services.filter((service) => service.active).map((service) => service.id));
+        setSelectedItems(daily.suggested_item_ids.filter((id) => activeItemIds.has(id)));
+        setSelectedServices(daily.suggested_service_ids.filter((id) => activeServiceIds.has(id)));
       }}>沿用上次清单</button>}
-      <fieldset><legend>今天愿意提供的物品</legend>{profile.items.filter((item) => item.active).map((item) => <label className="helper-choice" key={item.id}>
+      <fieldset><legend>今天愿意提供的物品</legend>{profile.items.filter((item) => item.active && item.available).map((item) => <label className="helper-choice" key={item.id}>
         <input type="checkbox" checked={selectedItems.includes(item.id)} onChange={(event) => toggle(selectedItems, item.id, event.target.checked, setSelectedItems)} />
         <span>{item.item_name}</span><small>{[item.brand, item.model].filter(Boolean).join(" ")}</small>
       </label>)}</fieldset>

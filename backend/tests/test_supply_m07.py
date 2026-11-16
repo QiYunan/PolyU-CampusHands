@@ -2,19 +2,29 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+import sqlite3
 from threading import Barrier
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import inspect, select, text
 from starlette.websockets import WebSocketDisconnect
 
 from app.main import create_app
-from app.models import HelpOffer
+from app.database import initialize_database, make_engine
+from app.models import (
+    DailyAvailability,
+    DailyAvailableItem,
+    DailyAvailableService,
+    HelpOffer,
+    HelpRequest,
+    UserItem,
+)
 from app.providers.fallback import ProviderRouter
 from app.providers.mock import MockLLMProvider
 from app.seed import seed_demo_people
 from app.services import ClaimConflict
+from app.supply_matching import search_supply_candidates
 from app.supply_services import accept_invitation
 
 
@@ -30,6 +40,14 @@ def _app(tmp_path):
 
 def _headers(helper_id):
     return {"X-Demo-User-Id": str(helper_id)}
+
+
+def _profile_item_input(item):
+    return {
+        key: item[key]
+        for key in ("id", "item_type", "item_name", "brand", "model", "active")
+        if key in item
+    }
 
 
 def _today_window():
@@ -54,7 +72,7 @@ def _prepare_helper(client, helper_id, *, model, building, service=True):
     saved = client.put(
         f"/api/demo/users/{helper_id}/helper-profile",
         headers=_headers(helper_id),
-        json={"items": [item], "services": services},
+        json={"items": [_profile_item_input(item)], "services": services},
     )
     assert saved.status_code == 200, saved.text
     body = saved.json()
@@ -76,8 +94,8 @@ def _prepare_helper(client, helper_id, *, model, building, service=True):
     return body
 
 
-def _borrow_request(client):
-    response = client.post("/api/requests", json={
+def _borrow_request(client, **overrides):
+    payload = {
         "category": "borrow",
         "need_summary": "Casio fx-991CN X 科学计算器",
         "item_type": "scientific_calculator",
@@ -87,7 +105,9 @@ def _borrow_request(client):
         "location": "Z",
         "deadline": (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(),
         "urgency": "high",
-    })
+    }
+    payload.update(overrides)
+    response = client.post("/api/requests", json=payload)
     assert response.status_code == 201, response.text
     return response.json()
 
@@ -120,9 +140,13 @@ def test_search_invite_and_first_accept_use_targeted_flow_not_public_board(tmp_p
         candidates = search.json()["candidates"]
         assert candidates[0]["helper_id"] == 5
         assert candidates[0]["match_reason"] == "exact_model"
+        assert candidates[0]["item_name"] == "Calculator 5"
+        assert candidates[0]["item_brand"] == "Casio"
+        assert candidates[0]["item_model"] == "fx-991CN X"
         assert candidates[1]["helper_id"] == 7
+        assert candidates[1]["item_name"] == "Calculator 7"
         serialized = search.text
-        for private_key in ("campus_building", "reliability_score", "inventory", "item_name"):
+        for private_key in ("campus_building", "reliability_score", "inventory", "item_id"):
             assert private_key not in serialized
 
         created = client.post(
@@ -260,3 +284,329 @@ def test_invitation_websocket_is_private_invalidation_only(tmp_path):
             with client.websocket_connect("/ws/helpers/5/invitations?demo_user_id=7", headers=origin):
                 pass
         assert denied.value.code == 1008
+
+
+def test_reachability_uses_arrival_against_deadline_and_available_until_with_fixed_clock(tmp_path):
+    app = _app(tmp_path)
+    fixed_now = datetime(2026, 11, 16, 4, 0, tzinfo=timezone.utc)
+
+    def naive(value):
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+
+    with TestClient(app):
+        with app.state.session_factory() as session:
+            seed_demo_people(session)
+            item = session.scalar(select(UserItem).where(UserItem.user_id == 5).order_by(UserItem.id))
+            item.item_type = "scientific_calculator"
+            item.brand = "Casio"
+            item.model = "fx-991CN X"
+            item.is_active = True
+            item.available = True
+            daily = DailyAvailability(
+                user_id=5,
+                local_date=fixed_now.astimezone(HK).date(),
+                willing=True,
+                available_from=naive(fixed_now - timedelta(minutes=5)),
+                available_until=naive(fixed_now + timedelta(minutes=10)),
+                campus_building="Z",
+                accepts_urgent=True,
+            )
+            request = HelpRequest(
+                requester_id=1,
+                category="borrow",
+                need_summary="Casio calculator",
+                item_type="scientific_calculator",
+                preferred_brand="Casio",
+                preferred_model="fx-991CN X",
+                substitution_policy="ask_before_substitute",
+                location="Z",
+                deadline=naive(fixed_now + timedelta(minutes=30)),
+                urgency="high",
+                status="draft",
+            )
+            session.add_all([daily, request])
+            session.flush()
+            session.add(DailyAvailableItem(daily_availability_id=daily.id, item_id=item.id))
+            session.flush()
+
+            # Handoff arrival is 12:03 HKT. Availability may end before the
+            # 12:30 deadline as long as arrival is no later than both bounds.
+            result = search_supply_candidates(session, request, fixed_now)
+            assert [candidate.helper.id for candidate in result.candidates] == [5]
+            daily.available_until = naive(fixed_now + timedelta(minutes=3))
+            request.deadline = naive(fixed_now + timedelta(minutes=3))
+            session.flush()
+            assert [candidate.helper.id for candidate in search_supply_candidates(
+                session, request, fixed_now,
+            ).candidates] == [5]
+
+            daily.available_until = naive(fixed_now + timedelta(minutes=3, seconds=-1))
+            session.flush()
+            too_late = search_supply_candidates(session, request, fixed_now)
+            assert too_late.candidates == []
+            assert too_late.issue == "unreachable_before_deadline"
+
+
+def test_yesterday_suggestions_exclude_foreign_and_soft_deactivated_capabilities(tmp_path):
+    app = _app(tmp_path)
+    with TestClient(app) as client:
+        with app.state.session_factory() as session:
+            seed_demo_people(session)
+        helper_profile = _prepare_helper(client, 5, model="fx-991CN X", building="Z")
+        foreign_profile = _prepare_helper(client, 7, model="fx-82MS", building="Y")
+        own_item_id = helper_profile["items"][0]["id"]
+        own_service_id = helper_profile["services"][0]["id"]
+        foreign_item_id = foreign_profile["items"][0]["id"]
+        foreign_service_id = foreign_profile["services"][0]["id"]
+
+        with app.state.session_factory() as session:
+            previous = session.scalar(select(DailyAvailability).where(DailyAvailability.user_id == 5))
+            previous.local_date -= timedelta(days=1)
+            session.add(DailyAvailableItem(
+                daily_availability_id=previous.id,
+                item_id=foreign_item_id,
+            ))
+            session.add(DailyAvailableService(
+                daily_availability_id=previous.id,
+                service_id=foreign_service_id,
+            ))
+            session.commit()
+
+        saved = client.put(
+            "/api/demo/users/5/helper-profile",
+            headers=_headers(5),
+            json={
+                "items": [_profile_item_input(item) for item in helper_profile["items"]],
+                "services": [],
+            },
+        )
+        assert saved.status_code == 200, saved.text
+        suggestions = client.get(
+            "/api/demo/users/5/daily-availability", headers=_headers(5),
+        ).json()
+        assert suggestions["availability"] is None
+        assert suggestions["suggested_item_ids"] == [own_item_id]
+        assert suggestions["suggested_service_ids"] == []
+        assert foreign_item_id not in suggestions["suggested_item_ids"]
+        assert own_service_id not in suggestions["suggested_service_ids"]
+
+
+def test_substitute_proposal_full_flow_uses_only_today_selected_item(tmp_path):
+    app = _app(tmp_path)
+    with TestClient(app) as client:
+        with app.state.session_factory() as session:
+            seed_demo_people(session)
+        profile = _prepare_helper(client, 5, model="fx-991CN X", building="Z")
+        updated = client.put(
+            "/api/demo/users/5/helper-profile",
+            headers=_headers(5),
+            json={
+                "items": [
+                    *[_profile_item_input(item) for item in profile["items"]],
+                    {
+                        "item_type": "scientific_calculator",
+                        "item_name": "Canon F-789",
+                        "brand": "Canon",
+                        "model": "F-789",
+                        "active": True,
+                    },
+                ],
+                "services": profile["services"],
+            },
+        )
+        assert updated.status_code == 200, updated.text
+        items = updated.json()["items"]
+        substitute = next(item for item in items if item["item_name"] == "Canon F-789")
+        daily = client.get(
+            "/api/demo/users/5/daily-availability", headers=_headers(5),
+        ).json()["availability"]
+        daily["item_ids"] = [item["id"] for item in items]
+        assert client.put(
+            "/api/demo/users/5/daily-availability", headers=_headers(5), json=daily,
+        ).status_code == 200
+
+        request = _borrow_request(client)
+        created = client.post(
+            f"/api/requests/{request['id']}/invitations", json={"helper_ids": [5]},
+        )
+        invitation_id = created.json()["batches"][0]["invitations"][0]["id"]
+        proposal = client.post(
+            f"/api/invitations/{invitation_id}/propose-substitute",
+            headers=_headers(5),
+            json={"item_id": substitute["id"], "note": "同类科学计算器"},
+        )
+        assert proposal.status_code == 200, proposal.text
+        assert proposal.json()["status"] == "proposed"
+        assert proposal.json()["item_name"] == "Canon F-789"
+
+        requester_view = client.get(f"/api/requests/{request['id']}/invitations").json()
+        shown = requester_view["batches"][0]["invitations"][0]
+        assert shown["item_name"] == "Canon F-789"
+        accepted = client.post(f"/api/invitations/{invitation_id}/accept-substitute")
+        assert accepted.status_code == 200, accepted.text
+        with app.state.session_factory() as session:
+            offer = session.scalar(select(HelpOffer).where(HelpOffer.invitation_id == invitation_id))
+            assert offer.item_id == substitute["id"]
+            assert session.get(UserItem, substitute["id"]).available is False
+
+
+def test_completed_handoff_keeps_item_unavailable_for_new_search(tmp_path):
+    app = _app(tmp_path)
+    with TestClient(app) as client:
+        with app.state.session_factory() as session:
+            seed_demo_people(session)
+        profile = _prepare_helper(client, 5, model="fx-991CN X", building="Z")
+        item_id = profile["items"][0]["id"]
+        first = _borrow_request(client)
+        created = client.post(
+            f"/api/requests/{first['id']}/invitations", json={"helper_ids": [5]},
+        ).json()
+        invitation_id = created["batches"][0]["invitations"][0]["id"]
+        offer = client.post(
+            f"/api/invitations/{invitation_id}/accept", headers=_headers(5),
+        ).json()
+        assert client.post(f"/api/requests/{first['id']}/start").json()["status"] == "in_progress"
+        assert client.post(f"/api/requests/{first['id']}/complete").json()["status"] == "in_progress"
+        completed = client.post(
+            f"/api/offers/{offer['id']}/confirm-completion", headers=_headers(5),
+        )
+        assert completed.json()["request_status"] == "completed"
+        with app.state.session_factory() as session:
+            assert session.get(UserItem, item_id).available is False
+
+        second = _borrow_request(client)
+        search = client.post(
+            "/api/helpers/search", json={"request_id": second["id"], "limit": 5},
+        )
+        assert search.status_code == 200
+        assert all(candidate["helper_id"] != 5 for candidate in search.json()["candidates"])
+
+
+def test_m07_conflicts_return_stable_codes(tmp_path):
+    app = _app(tmp_path)
+    with TestClient(app) as client:
+        with app.state.session_factory() as session:
+            seed_demo_people(session)
+        profile = _prepare_helper(client, 5, model="fx-991CN X", building="Z")
+        _prepare_helper(client, 7, model=None, building="Y")
+        updated = client.put(
+            "/api/demo/users/5/helper-profile",
+            headers=_headers(5),
+            json={
+                "items": [
+                    *[_profile_item_input(item) for item in profile["items"]],
+                    {
+                        "item_type": "scientific_calculator",
+                        "item_name": "Canon F-789",
+                        "brand": "Canon",
+                        "model": "F-789",
+                        "active": True,
+                    },
+                ],
+                "services": profile["services"],
+            },
+        ).json()
+        substitute_id = next(
+            item["id"] for item in updated["items"] if item["item_name"] == "Canon F-789"
+        )
+        daily = client.get(
+            "/api/demo/users/5/daily-availability", headers=_headers(5),
+        ).json()["availability"]
+        daily["item_ids"] = [item["id"] for item in updated["items"]]
+        client.put("/api/demo/users/5/daily-availability", headers=_headers(5), json=daily)
+
+        request = _borrow_request(client)
+        no_round = client.post(f"/api/requests/{request['id']}/invitations/close")
+        assert (no_round.status_code, no_round.json()["code"]) == (409, "no_open_round")
+        stale = client.post(
+            f"/api/requests/{request['id']}/invitations", json={"helper_ids": [999]},
+        )
+        assert (stale.status_code, stale.json()["code"]) == (409, "candidates_stale")
+        opened = client.post(
+            f"/api/requests/{request['id']}/invitations", json={"helper_ids": [5]},
+        ).json()
+        invitation_id = opened["batches"][0]["invitations"][0]["id"]
+        duplicate_round = client.post(
+            f"/api/requests/{request['id']}/invitations", json={"helper_ids": [5]},
+        )
+        assert (duplicate_round.status_code, duplicate_round.json()["code"]) == (
+            409, "invitation_round_open",
+        )
+        not_searchable = client.post(
+            "/api/helpers/search", json={"request_id": request["id"], "limit": 5},
+        )
+        assert (not_searchable.status_code, not_searchable.json()["code"]) == (
+            409, "request_not_searchable",
+        )
+        client.post(
+            f"/api/invitations/{invitation_id}/decline",
+            headers=_headers(5), json={"reason": "declined"},
+        )
+        inactive = client.post(
+            f"/api/invitations/{invitation_id}/accept", headers=_headers(5),
+        )
+        assert (inactive.status_code, inactive.json()["code"]) == (409, "invitation_inactive")
+        client.post(f"/api/requests/{request['id']}/invitations/close")
+
+        exact = _borrow_request(client, substitution_policy="exact_only")
+        exact_invitation = client.post(
+            f"/api/requests/{exact['id']}/invitations", json={"helper_ids": [5]},
+        ).json()["batches"][0]["invitations"][0]["id"]
+        substitute_denied = client.post(
+            f"/api/invitations/{exact_invitation}/propose-substitute",
+            headers=_headers(5), json={"item_id": substitute_id},
+        )
+        assert (substitute_denied.status_code, substitute_denied.json()["code"]) == (
+            409, "substitute_not_allowed",
+        )
+
+        race = _borrow_request(client)
+        invitations = client.post(
+            f"/api/requests/{race['id']}/invitations", json={"helper_ids": [5, 7]},
+        ).json()["batches"][0]["invitations"]
+        first, second = invitations
+        assert client.post(
+            f"/api/invitations/{first['id']}/accept", headers=_headers(first["helper_id"]),
+        ).status_code == 200
+        claimed = client.post(
+            f"/api/invitations/{second['id']}/accept", headers=_headers(second["helper_id"]),
+        )
+        assert (claimed.status_code, claimed.json()["code"]) == (409, "already_claimed")
+
+
+def test_m07_legacy_sqlite_initialization_is_repeatable(tmp_path):
+    path = tmp_path / "legacy-m07.db"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE user_items (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, "
+            "item_type VARCHAR(64) NOT NULL, item_name VARCHAR(120) NOT NULL, "
+            "available BOOLEAN NOT NULL)"
+        )
+        connection.execute(
+            "CREATE TABLE help_offers (id INTEGER PRIMARY KEY, request_id INTEGER NOT NULL, "
+            "helper_id INTEGER NOT NULL, item_id INTEGER NOT NULL, status VARCHAR(32) NOT NULL, "
+            "sent_at DATETIME NOT NULL, responded_at DATETIME, expires_at DATETIME NOT NULL, "
+            "requester_confirmed_at DATETIME, helper_confirmed_at DATETIME)"
+        )
+    engine = make_engine(f"sqlite:///{path.as_posix()}")
+    initialize_database(engine)
+    initialize_database(engine)
+    schema = inspect(engine)
+    assert {
+        "user_service_capabilities",
+        "daily_availability",
+        "daily_available_items",
+        "daily_available_services",
+        "invitation_batches",
+        "help_invitations",
+    }.issubset(schema.get_table_names())
+    assert {"invitation_id", "service_capability_id"}.issubset(
+        {column["name"] for column in schema.get_columns("help_offers")}
+    )
+    assert "is_active" in {column["name"] for column in schema.get_columns("user_items")}
+    assert "uq_open_invitation_batch" in {
+        index["name"] for index in schema.get_indexes("invitation_batches")
+    }
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT COUNT(*) FROM users WHERE id = 1")).scalar_one() == 1
+    engine.dispose()

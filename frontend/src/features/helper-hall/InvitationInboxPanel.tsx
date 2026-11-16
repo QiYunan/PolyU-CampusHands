@@ -4,11 +4,12 @@ import {
   acceptInvitation,
   confirmInvitationCompletion,
   declineInvitation,
+  getDailyAvailability,
   getHelperProfile,
   getInvitations,
   proposeSubstitute,
 } from "./api";
-import type { HelperProfile, Invitation, InvitationInbox } from "./types";
+import type { DailyAvailability, HelperProfile, Invitation, InvitationInbox } from "./types";
 import { useInvitationRealtime } from "./useInvitationRealtime";
 import "./helperHall.css";
 
@@ -43,6 +44,7 @@ function InvitationSummary({ invitation }: { invitation: Invitation }) {
 export function InvitationInboxPanel({ actorId }: { actorId: number }) {
   const [inbox, setInbox] = useState<InvitationInbox | null>(null);
   const [profile, setProfile] = useState<HelperProfile | null>(null);
+  const [daily, setDaily] = useState<DailyAvailability | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [pendingId, setPendingId] = useState<number | null>(null);
@@ -51,9 +53,14 @@ export function InvitationInboxPanel({ actorId }: { actorId: number }) {
 
   const refresh = useCallback(async () => {
     try {
-      const [nextInbox, nextProfile] = await Promise.all([getInvitations(actorId), getHelperProfile(actorId)]);
+      const [nextInbox, nextProfile, nextDaily] = await Promise.all([
+        getInvitations(actorId),
+        getHelperProfile(actorId),
+        getDailyAvailability(actorId),
+      ]);
       setInbox(nextInbox);
       setProfile(nextProfile);
+      setDaily(nextDaily);
       setError("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "读取邀请失败");
@@ -83,7 +90,10 @@ export function InvitationInboxPanel({ actorId }: { actorId: number }) {
     }
   }
 
-  const activeItems = profile?.items.filter((item) => item.active) ?? [];
+  const todayItemIds = new Set(daily?.availability?.item_ids ?? []);
+  const activeItems = profile?.items.filter((item) => (
+    item.active && item.available && todayItemIds.has(item.id)
+  )) ?? [];
   return <section className="helper-panel" aria-label="收到的邀请">
     <header className="helper-panel__header">
       <div><span className="helper-kicker">TARGETED INVITATIONS</span><h2>收到的邀请</h2></div>
@@ -99,9 +109,9 @@ export function InvitationInboxPanel({ actorId }: { actorId: number }) {
       {inbox.pending.length === 0 ? <p className="helper-empty">当前没有待处理邀请。</p> : inbox.pending.map((invitation) => <article className="helper-card helper-invitation" key={invitation.id} aria-label={`邀请 ${invitation.id}`}>
         <InvitationSummary invitation={invitation} />
         {invitation.status === "proposed" ? <p className="helper-alert">替代方案已发送，等待 Requester 确认。</p> : <>
-          {invitation.category === "borrow" && activeItems.length > 0 && <div className="helper-substitute">
+          {invitation.category === "borrow" && activeItems.some((item) => item.item_type === invitation.request_item_type) && <div className="helper-substitute">
             <label>改提替代物品<select aria-label={`替代物品 ${invitation.id}`} value={substituteByInvitation[invitation.id] ?? ""} onChange={(event) => setSubstituteByInvitation((current) => ({ ...current, [invitation.id]: Number(event.target.value) }))}>
-              <option value="">选择物品</option>{activeItems.map((item) => <option key={item.id} value={item.id}>{item.item_name}</option>)}
+              <option value="">选择物品</option>{activeItems.filter((item) => item.item_type === invitation.request_item_type).map((item) => <option key={item.id} value={item.id}>{item.item_name}</option>)}
             </select></label>
             <input aria-label={`替代说明 ${invitation.id}`} placeholder="替代说明（可选）" value={noteByInvitation[invitation.id] ?? ""} onChange={(event) => setNoteByInvitation((current) => ({ ...current, [invitation.id]: event.target.value }))} />
             <button type="button" className="helper-secondary" disabled={pendingId !== null || !substituteByInvitation[invitation.id]} onClick={() => void run(

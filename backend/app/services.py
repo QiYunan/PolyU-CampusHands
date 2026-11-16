@@ -536,8 +536,6 @@ def start_handoff(session: Session, request_id: int, actor_id: int) -> HelpReque
 
 def _finish_if_confirmed(session: Session, offer: HelpOffer) -> None:
     if offer.requester_confirmed_at is not None and offer.helper_confirmed_at is not None:
-        if offer.item is not None:
-            offer.item.available = True
         transition(offer.request, "completed")
         _event(session, offer.request, "request_completed", "双方已确认，请求完成")
 

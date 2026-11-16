@@ -57,6 +57,7 @@ class HelperProfileUpdate(BaseModel):
 
 class ProfileItemRead(ProfileItemInput):
     id: int
+    available: bool
 
 
 class ProfileServiceRead(ProfileServiceInput):
@@ -140,6 +141,9 @@ class HelperCandidateRead(BaseModel):
     available_until: datetime
     reliability_level: ReliabilityLevel
     is_substitute: bool
+    item_name: str | None
+    item_brand: str | None
+    item_model: str | None
 
 
 class HelperSearchRead(BaseModel):
@@ -187,6 +191,7 @@ class InvitationRead(BaseModel):
     helper_name: str
     requester_name: str
     category: Literal["borrow", "service"]
+    request_item_type: ItemType
     need_summary: str
     location: str
     deadline: datetime

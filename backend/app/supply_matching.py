@@ -213,9 +213,6 @@ def search_supply_candidates(
             continue
         if request.urgency == "high" and not daily.accepts_urgent:
             continue
-        if daily.available_until < deadline:
-            continue
-
         item = None
         service = None
         reason = None
@@ -236,7 +233,7 @@ def search_supply_candidates(
             continue
         departure = max(current, daily.available_from)
         arrival = departure + timedelta(minutes=walk + HANDOFF_BUFFER_MINUTES)
-        if arrival > deadline:
+        if arrival > deadline or arrival > daily.available_until:
             continue
         timely_seen = True
         arrival_minutes = max(0, math.ceil((arrival - current).total_seconds() / 60))
@@ -244,7 +241,7 @@ def search_supply_candidates(
         score = helper.reliability_score
         score_key = -float(score) if score is not None and math.isfinite(float(score)) else float("inf")
         tier = {"exact_model": 0, "exact_brand": 1, "service_exact": 0, "compatible": 2}[reason]
-        slack = (daily.available_until - deadline).total_seconds()
+        slack = (min(deadline, daily.available_until) - arrival).total_seconds()
         candidate = SupplyCandidate(
             helper=helper,
             availability=daily,

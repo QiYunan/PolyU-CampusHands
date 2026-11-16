@@ -13,15 +13,15 @@ afterEach(() => {
 
 const profile = {
   user_id: 5,
-  items: [{ id: 21, item_type: "scientific_calculator", item_name: "Casio fx-991CN X", brand: "Casio", model: "fx-991CN X", active: true }],
+  items: [{ id: 21, item_type: "scientific_calculator", item_name: "Casio fx-991CN X", brand: "Casio", model: "fx-991CN X", active: true, available: true }],
   services: [{ id: 8, service_code: "moving", service_name: "搬运实验器材", active: true }],
 };
 
 const daily = {
   local_date: "2026-11-16",
   availability: null,
-  suggested_item_ids: [21],
-  suggested_service_ids: [8],
+  suggested_item_ids: [21, 999],
+  suggested_service_ids: [8, 999],
 };
 
 const locations = [{ code: "Z", label_zh: "Z座", label_en: "Block Z" }];
@@ -56,11 +56,33 @@ test("today status reuses prior capability choices without re-entering inventory
 });
 
 test("invitation inbox exposes targeted actions and no public board", async () => {
+  const inboxProfile = {
+    ...profile,
+    items: [
+      ...profile.items,
+      { id: 22, item_type: "scientific_calculator", item_name: "Not selected today", brand: null, model: null, active: true, available: true },
+      { id: 23, item_type: "scientific_calculator", item_name: "Already lent out", brand: null, model: null, active: true, available: false },
+    ],
+  };
+  const inboxDaily = {
+    ...daily,
+    suggested_item_ids: [],
+    suggested_service_ids: [],
+    availability: {
+      willing: true,
+      available_from: "2026-11-16T13:00:00+08:00",
+      available_until: "2026-11-16T18:00:00+08:00",
+      campus_building: "Z",
+      accepts_urgent: true,
+      item_ids: [21, 23],
+      service_ids: [8],
+    },
+  };
   let inbox: InvitationInbox = {
     helper_id: 5,
     pending: [{
       id: 31, batch_id: 9, round_number: 1, request_id: 42, helper_id: 5, helper_name: "Erin", requester_name: "Alice",
-      category: "borrow", need_summary: "Casio fx-991CN X 科学计算器", location: "Z",
+      category: "borrow", request_item_type: "scientific_calculator", need_summary: "Casio fx-991CN X 科学计算器", location: "Z",
       deadline: "2026-11-16T14:00:00Z", urgency: "high", match_reason: "exact_model",
       response_type: "direct", status: "pending", decline_reason: null, note: null,
       item_id: 21, item_name: "Casio fx-991CN X", service_id: null, service_name: null,
@@ -71,7 +93,8 @@ test("invitation inbox exposes targeted actions and no public board", async () =
     history: [],
   };
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-    if (url.endsWith("/helper-profile")) return { ok: true, json: async () => profile };
+    if (url.endsWith("/helper-profile")) return { ok: true, json: async () => inboxProfile };
+    if (url.endsWith("/daily-availability")) return { ok: true, json: async () => inboxDaily };
     if (url.endsWith("/accept") && init?.method === "POST") {
       const accepted = { ...inbox.pending[0], status: "accepted", request_status: "matched", offer_id: 51 };
       inbox = { ...inbox, pending: [], active: [accepted] };
@@ -86,6 +109,10 @@ test("invitation inbox exposes targeted actions and no public board", async () =
   expect(await screen.findByRole("heading", { name: "收到的邀请" })).toBeInTheDocument();
   expect(screen.getByText("这里只出现系统定向发送给你的请求，不需要浏览公开求助帖。")).toBeInTheDocument();
   expect(screen.queryByText("开放请求")).not.toBeInTheDocument();
+  const substituteSelect = screen.getByLabelText("替代物品 31");
+  expect(within(substituteSelect).getByRole("option", { name: "Casio fx-991CN X" })).toBeInTheDocument();
+  expect(within(substituteSelect).queryByRole("option", { name: "Not selected today" })).not.toBeInTheDocument();
+  expect(within(substituteSelect).queryByRole("option", { name: "Already lent out" })).not.toBeInTheDocument();
   fireEvent.click(await screen.findByRole("button", { name: "接受" }));
   expect(await screen.findByText("已接受邀请。")).toBeInTheDocument();
   await waitFor(() => expect(screen.getByText("当前没有待处理邀请。")).toBeInTheDocument());

@@ -23,7 +23,7 @@ from app.providers.fallback import ProviderRouter
 from app.providers.base import LLMUnavailable
 from app.agent_tools import InvalidAgentAction
 from app.services import ClaimConflict, Forbidden, InvalidDeadline, NotFound, UnknownLocation, advance_due
-from app.supply_services import CandidatesStale, advance_supply_due
+from app.supply_services import CandidatesStale, SupplyConflict, advance_supply_due
 from app.state_machine import StateConflict
 from app.realtime import ConnectionManager, EventScanner
 from app.ws_routes import configured_public_demo_origins, router as ws_router
@@ -123,6 +123,10 @@ def create_app(database_url: str | None = None, providers: ProviderRouter | None
             status_code=409,
             content={"detail": "候选状态已变化，请重新搜索。", "code": "candidates_stale"},
         )
+
+    @application.exception_handler(SupplyConflict)
+    async def supply_conflict(_request, error: SupplyConflict):
+        return JSONResponse(status_code=409, content={"detail": str(error), "code": error.code})
 
     @application.exception_handler(LLMUnavailable)
     async def llm_unavailable(_request, _error: LLMUnavailable):
