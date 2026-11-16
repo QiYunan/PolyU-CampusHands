@@ -9,24 +9,36 @@ from app.models import HelpRequest, User, UserItem
 
 
 DEMO_HELPERS = (
-    (2, "Bob", "VA", "scientific_calculator", "Scientific calculator"),
-    (3, "Carol", "PQ", "scientific_calculator", "Scientific calculator"),
-    (4, "David", "Library", "charger", "USB-C charger"),
+    # id, display name, building, availability, internal reliability, item type,
+    # item name, brand, model, and item availability. All identities are fictional.
+    (2, "Bob", "VA", "available", 0.70, "scientific_calculator", "Scientific calculator", None, None, True),
+    (3, "Carol", "PQ", "available", 0.60, "scientific_calculator", "Scientific calculator", None, None, True),
+    (4, "David", "L", "available", 0.40, "charger", "USB-C charger", None, None, True),
+    (5, "Erin", "Z", "available", 0.95, "scientific_calculator", "Casio fx-991EX scientific calculator", "Casio", "fx-991EX", True),
+    (6, "Felix", "L", "available", 0.80, "scientific_calculator", "Generic scientific calculator", None, None, True),
+    (7, "Grace", "Y", "available", 0.50, "scientific_calculator", "Casio fx-991EX scientific calculator", "Casio", "fx-991EX", True),
+    (8, "Hana", "N", "available", 0.70, "scientific_calculator", "Unavailable scientific calculator", None, None, False),
+    (9, "Ivan", "L", "available", 0.85, "charger", "Compact USB-C charger", None, None, True),
+    (10, "June", "L", "available", 0.55, "charger", "Spare USB-C charger", None, None, True),
+    (11, "Kai", "Q", "unavailable", 0.80, "adapter", "USB-C adapter", None, None, True),
+    (12, "Lea", "A", "available", 0.65, "umbrella", "Umbrella", None, None, True),
 )
 SEED_REQUEST_TEXT = "BorrowLoop demo seed: scientific calculator"
 
 
 def seed_demo_people(session: Session) -> None:
-    for user_id, name, building, item_type, item_name in DEMO_HELPERS:
+    for user_id, name, building, status, reliability, item_type, item_name, brand, model, available in DEMO_HELPERS:
         user = session.get(User, user_id)
         if user is None:
-            session.add(User(id=user_id, display_name=name, campus_building=building, availability_status="available"))
+            session.add(User(id=user_id, display_name=name, campus_building=building,
+                             availability_status=status, reliability_score=reliability))
             session.flush()
         elif user.display_name != name:
             raise RuntimeError(f"Demo user ID {user_id} belongs to another user")
         item = session.scalar(select(UserItem).where(UserItem.user_id == user_id, UserItem.item_type == item_type, UserItem.item_name == item_name))
         if item is None:
-            session.add(UserItem(user_id=user_id, item_type=item_type, item_name=item_name, available=True))
+            session.add(UserItem(user_id=user_id, item_type=item_type, item_name=item_name,
+                                 brand=brand, model=model, available=available))
     session.commit()
 
 

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.agent_drafts import clarify_draft, confirm_draft, create_draft, draft_view, edit_draft, _require_draft
 from app.agent_orchestrator import run_observation, run_search
-from app.agent_schemas import AgentRunRead, DraftClarify, DraftCreate, DraftEdit, DraftRead
+from app.agent_schemas import AgentRunRead, DraftClarify, DraftConfirm, DraftCreate, DraftEdit, DraftRead
 from app.routes import demo_actor, get_session
 from app.schemas import RequestRead
 from app.services import InvalidDeadline, request_view
@@ -48,9 +48,9 @@ def edit(draft_id: int, payload: DraftEdit, session: Session = Depends(get_sessi
 
 
 @router.post("/agent/drafts/{draft_id}/confirm", response_model=RequestRead)
-def confirm(draft_id: int, session: Session = Depends(get_session), actor_id: int = Depends(demo_actor)):
+def confirm(draft_id: int, payload: DraftConfirm, session: Session = Depends(get_session), actor_id: int = Depends(demo_actor)):
     try:
-        return request_view(session, confirm_draft(session, draft_id, actor_id))
+        return request_view(session, confirm_draft(session, draft_id, payload, actor_id))
     except InvalidDeadline as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 

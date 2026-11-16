@@ -21,16 +21,17 @@ from app.providers.mock import MockLLMProvider
 from app.providers.fallback import ProviderRouter
 from app.providers.base import LLMUnavailable
 from app.agent_tools import InvalidAgentAction
-from app.services import Forbidden, NotFound, advance_due
+from app.services import ClaimConflict, Forbidden, InvalidDeadline, NotFound, UnknownLocation, advance_due
 from app.state_machine import StateConflict
 from app.realtime import ConnectionManager, EventScanner
-from app.ws_routes import router as ws_router
+from app.ws_routes import configured_public_demo_origins, router as ws_router
 
 
 logger = logging.getLogger(__name__)
 
 
 def create_app(database_url: str | None = None, providers: ProviderRouter | None = None) -> FastAPI:
+    public_demo_origins = configured_public_demo_origins()
     engine = make_engine(database_url or default_database_url())
     session_factory = make_session_factory(engine)
     if providers is None:
@@ -86,6 +87,7 @@ def create_app(database_url: str | None = None, providers: ProviderRouter | None
     application.state.provider_router = providers
     application.state.realtime_manager = realtime_manager
     application.state.event_scanner = event_scanner
+    application.state.public_demo_origins = public_demo_origins
     application.include_router(router)
     application.include_router(agent_router)
     application.include_router(ws_router)
@@ -107,6 +109,10 @@ def create_app(database_url: str | None = None, providers: ProviderRouter | None
     async def conflict(_request, error: StateConflict):
         return JSONResponse(status_code=409, content={"detail": str(error)})
 
+    @application.exception_handler(ClaimConflict)
+    async def already_claimed(_request, _error: ClaimConflict):
+        return JSONResponse(status_code=409, content={"detail": "该请求已被其他同学接下", "code": "already_claimed"})
+
     @application.exception_handler(LLMUnavailable)
     async def llm_unavailable(_request, _error: LLMUnavailable):
         return JSONResponse(status_code=503, content={"detail": "模型暂不可用，请稍后重试。", "code": "llm_unavailable", "retryable": True})
@@ -114,6 +120,14 @@ def create_app(database_url: str | None = None, providers: ProviderRouter | None
     @application.exception_handler(InvalidAgentAction)
     async def invalid_agent_action(_request, _error: InvalidAgentAction):
         return JSONResponse(status_code=422, content={"detail": "Agent 动作或参数无效。"})
+
+    @application.exception_handler(UnknownLocation)
+    async def unknown_location(_request, _error: UnknownLocation):
+        return JSONResponse(status_code=422, content={"detail": "请选择主校园内可识别的交接地点。", "code": "unknown_location"})
+
+    @application.exception_handler(InvalidDeadline)
+    async def invalid_deadline(_request, _error: InvalidDeadline):
+        return JSONResponse(status_code=422, content={"detail": "请填写有效且尚未过去的截止时间。"})
 
     return application
 

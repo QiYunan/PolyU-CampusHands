@@ -4,19 +4,66 @@ export const itemTypes = {
   adapter: "转接头",
   stationery: "文具",
   umbrella: "雨伞",
+  other: "其他",
 } as const;
 
 export type ItemType = keyof typeof itemTypes;
+export type RequestCategory = "borrow" | "service";
+export type Urgency = "normal" | "high";
+
+export type SubstitutionPolicy = "ask_before_substitute" | "exact_only" | "equivalent_ok";
+export type MatchingIssue =
+  | "unknown_location"
+  | "no_item_inventory"
+  | "exact_preference_unavailable"
+  | "alternatives_available_needs_confirmation"
+  | "no_available_helper"
+  | "unreachable_before_deadline"
+  | "candidate_exhausted";
+
+export type CampusLocation = { code: string; label_zh: string; label_en: string };
+export type DemoRole = { id: number; display_name: string; role: "requester" | "helper" };
+export type BoardEntry = {
+  id: number;
+  requester_name: string;
+  category: RequestCategory;
+  need_summary: string;
+  item_type: ItemType;
+  location: string;
+  deadline: string;
+  urgency: Urgency;
+  status: HelpRequest["status"];
+};
+export type HelperBoard = {
+  viewer: {
+    id: number;
+    display_name: string;
+  };
+  requests: BoardEntry[];
+  dismissed_requests: BoardEntry[];
+  closed_requests: Array<{ id: number; status: HelpRequest["status"] }>;
+};
+
+export const substitutionPolicyLabels: Record<SubstitutionPolicy, string> = {
+  ask_before_substitute: "替代品先征求同意",
+  exact_only: "只接受准确品牌或型号",
+  equivalent_ok: "接受同类兼容物品",
+};
 
 export type HelpRequest = {
   id: number;
   requester_id: number;
-  category: "borrow";
+  category: RequestCategory;
+  need_summary: string;
   raw_text: string | null;
   item_type: ItemType;
+  preferred_brand: string | null;
+  preferred_model: string | null;
+  substitution_policy: SubstitutionPolicy;
+  matching_issue: MatchingIssue | null;
   location: string;
   deadline: string;
-  urgency: string | null;
+  urgency: Urgency;
   status: "draft" | "searching" | "awaiting_response" | "matched" | "in_progress" | "completed" | "cancelled" | "expired" | "failed";
   created_at: string;
   updated_at: string;
@@ -25,6 +72,20 @@ export type HelpRequest = {
   handoff_location?: string | null;
   requester_confirmed?: boolean;
   helper_confirmed?: boolean;
+  helper_note?: string | null;
+  offered_brand?: string | null;
+  offered_model?: string | null;
+  response_type?: "direct" | "substitute" | null;
+  proposals?: RequestProposal[];
+};
+
+export type RequestProposal = {
+  id: number;
+  helper_name: string;
+  help_note: string | null;
+  offered_brand: string | null;
+  offered_model: string | null;
+  status: "proposed" | "declined" | "accepted" | string;
 };
 
 export type PublicEvent = {
@@ -38,9 +99,15 @@ export type HelpOffer = {
   id: number;
   request_id: number;
   helper_id: number;
-  item_type: ItemType;
-  item_name: string;
+  category: RequestCategory;
+  need_summary: string;
+  item_type: ItemType | null;
+  item_name: string | null;
+  response_type: "direct" | "substitute";
   message?: string | null;
+  help_note: string | null;
+  offered_brand: string | null;
+  offered_model: string | null;
   location: string;
   deadline: string;
   status: string;
@@ -52,20 +119,34 @@ export type HelpOffer = {
 };
 
 export type RequestInput = {
+  category: RequestCategory;
+  need_summary: string;
   item_type: ItemType;
   location: string;
   deadline: string;
+  urgency: Urgency;
   raw_text?: string;
+  preferred_brand?: string | null;
+  preferred_model?: string | null;
+  substitution_policy?: SubstitutionPolicy;
 };
+
+export type RequestEdit = { location?: string; deadline?: string };
 
 export type AgentDraft = {
   id: number;
   raw_text: string;
+  category: RequestCategory;
+  need_summary: string | null;
   item_type: ItemType | null;
+  preferred_brand: string | null;
+  preferred_model: string | null;
+  substitution_policy: SubstitutionPolicy;
+  matching_issue: MatchingIssue | null;
   location: string | null;
   deadline: string | null;
-  urgency: "normal" | "high" | null;
-  missing_fields: Array<"item_type" | "location" | "deadline">;
+  urgency: Urgency | null;
+  missing_fields: Array<"need_summary" | "location" | "deadline">;
   public_question: string | null;
   status: "collecting_details" | "ready" | "confirmed";
   request_id: number | null;
@@ -90,8 +171,16 @@ export type AgentRun = {
   fallback_active: boolean;
   message: string;
   action_committed: boolean;
-  validated_actions: Array<"search_helpers" | "send_help_offer">;
+  validated_actions: Array<"search_helpers" | "publish_request">;
+  matching_issue: MatchingIssue | null;
 };
+
+export class ApiError extends Error {
+  constructor(message: string, public readonly status: number, public readonly code: string | null) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   let response: Response;
@@ -103,6 +192,7 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     const body: unknown = await response.json().catch(() => null);
     let message = `请求失败（${response.status}）`;
+    let code: string | null = null;
     if (typeof body === "object" && body !== null && "detail" in body) {
       const detail = body.detail;
       if (typeof detail === "string") message = detail;
@@ -112,7 +202,8 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
           .join("；");
       }
     }
-    throw new Error(message);
+    if (typeof body === "object" && body !== null && "code" in body && typeof body.code === "string") code = body.code;
+    throw new ApiError(message, response.status, code);
   }
   return (await response.json()) as T;
 }
@@ -137,12 +228,19 @@ export function clarifyAgentDraft(id: number, text: string): Promise<AgentDraft>
   return api(`/api/agent/drafts/${id}/clarify`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
 }
 
-export function editAgentDraft(id: number, edits: Partial<Pick<AgentDraft, "item_type" | "location" | "deadline" | "urgency">>): Promise<AgentDraft> {
+export function editAgentDraft(id: number, edits: Partial<Pick<AgentDraft, "item_type" | "location" | "deadline" | "urgency" | "preferred_brand" | "preferred_model" | "substitution_policy">>): Promise<AgentDraft> {
   return api(`/api/agent/drafts/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(edits) });
 }
 
-export function confirmAgentDraft(id: number): Promise<HelpRequest> {
-  return api(`/api/agent/drafts/${id}/confirm`, { method: "POST" });
+export type AgentDraftConfirmInput = Pick<AgentDraft,
+  "category" | "need_summary" | "item_type" | "location" | "deadline" | "urgency" |
+  "preferred_brand" | "preferred_model" | "substitution_policy"
+>;
+
+export function confirmAgentDraft(id: number, input: AgentDraftConfirmInput): Promise<HelpRequest> {
+  return api(`/api/agent/drafts/${id}/confirm`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+  });
 }
 
 export function agentSearch(id: string): Promise<AgentRun> {
@@ -162,7 +260,29 @@ export function getHelpRequest(id: string): Promise<HelpRequest> {
   return api<HelpRequest>(`/api/requests/${encodeURIComponent(id)}`);
 }
 
-export type RequestAction = "search" | "cancel" | "start" | "complete";
+export function getLocations(): Promise<CampusLocation[]> {
+  return api<CampusLocation[]>("/api/locations");
+}
+
+export function getDemoRoles(): Promise<DemoRole[]> {
+  return api<DemoRole[]>("/api/demo/roles");
+}
+
+export function editHelpRequest(id: string, edits: RequestEdit): Promise<HelpRequest> {
+  return api<HelpRequest>(`/api/requests/${encodeURIComponent(id)}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(edits),
+  });
+}
+
+export function acceptProposal(id: number): Promise<HelpRequest> {
+  return api<HelpRequest>(`/api/offers/${id}/accept-proposal`, { method: "POST" });
+}
+
+export function declineProposal(id: number): Promise<HelpRequest> {
+  return api<HelpRequest>(`/api/offers/${id}/decline-proposal`, { method: "POST" });
+}
+
+export type RequestAction = "publish" | "cancel" | "start" | "complete";
 
 export function actOnRequest(id: string, action: RequestAction): Promise<HelpRequest> {
   return api<HelpRequest>(`/api/requests/${encodeURIComponent(id)}/${action}`, { method: "POST" });
@@ -170,6 +290,30 @@ export function actOnRequest(id: string, action: RequestAction): Promise<HelpReq
 
 function helperHeaders(helperId: number): HeadersInit {
   return { "X-Demo-User-Id": String(helperId) };
+}
+
+export function getHelperBoard(helperId: number): Promise<HelperBoard> {
+  return api<HelperBoard>("/api/helper-board", { headers: helperHeaders(helperId) });
+}
+
+export function actOnBoardRequest(requestId: number, helperId: number, action: "dismiss" | "restore"): Promise<unknown> {
+  return api(`/api/requests/${requestId}/${action}`, { method: "POST", headers: helperHeaders(helperId) });
+}
+
+export type ClaimInput = {
+  capability_confirmed: true;
+  response_type: "direct" | "substitute";
+  help_note?: string | null;
+  offered_brand?: string | null;
+  offered_model?: string | null;
+};
+
+export function claimBoardRequest(requestId: number, helperId: number, input: ClaimInput): Promise<HelpOffer> {
+  return api<HelpOffer>(`/api/requests/${requestId}/claim`, {
+    method: "POST",
+    headers: { ...helperHeaders(helperId), "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
 }
 
 export function getHelperOffers(helperId: number): Promise<HelpOffer[]> {

@@ -9,13 +9,18 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.models import AgentEvent, HelpOffer, HelpRequest
-from app.realtime_schemas import RealtimeNotice, offer_notice, request_notice
+from app.realtime_schemas import RealtimeNotice, board_notice, offer_notice, request_notice
 
 
 logger = logging.getLogger(__name__)
 SCAN_INTERVAL_SECONDS = 0.25
 QUEUE_CAPACITY = 32
 SEND_TIMEOUT_SECONDS = 2
+BOARD_EVENTS = {
+    "request_published", "request_claimed", "request_cancelled", "request_expired",
+    "request_updated", "substitute_proposed", "substitute_declined", "handoff_started",
+    "requester_confirmed", "helper_confirmed", "request_completed",
+}
 
 
 @dataclass(eq=False)
@@ -111,6 +116,18 @@ class EventScanner:
                 self.manager.publish("request", request.id, request_frame)
                 for helper_id, frame in helper_frames:
                     self.manager.publish("helper", helper_id, frame)
+                if event.event_type in BOARD_EVENTS:
+                    published = event.event_type == "request_published" or session.scalar(select(AgentEvent.id).where(
+                        AgentEvent.request_id == request.id,
+                        AgentEvent.event_type == "request_published",
+                    )) is not None
+                    if published:
+                        board_helpers = {
+                            connection.resource_id for connection in self.manager.connections
+                            if not connection.closed and connection.resource_kind == "helper_board"
+                        }
+                        for helper_id in board_helpers:
+                            self.manager.publish("helper_board", helper_id, board_notice(event, helper_id))
                 self.cursor = event.id
                 processed += 1
         return processed

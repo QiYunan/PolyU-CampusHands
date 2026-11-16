@@ -28,11 +28,16 @@ class HelpRequest(Base):
     requester_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     category: Mapped[str] = mapped_column(String(32), nullable=False, default="borrow")
     raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    need_summary: Mapped[str] = mapped_column(String(200), nullable=False, default="校园求助")
     item_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    preferred_brand: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    preferred_model: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    substitution_policy: Mapped[str | None] = mapped_column(String(32), nullable=True, default="equivalent_ok")
     location: Mapped[str] = mapped_column(String(80), nullable=False)
     deadline: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     urgency: Mapped[str | None] = mapped_column(String(32), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    matching_issue: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now_naive)
     updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
     requester: Mapped[User] = relationship(back_populates="requests")
@@ -46,7 +51,12 @@ class HelpRequestDraft(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     requester_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     raw_text: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String(32), nullable=False, default="borrow")
+    need_summary: Mapped[str | None] = mapped_column(String(200), nullable=True)
     item_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    preferred_brand: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    preferred_model: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    substitution_policy: Mapped[str | None] = mapped_column(String(32), nullable=True, default="equivalent_ok")
     location: Mapped[str | None] = mapped_column(String(80), nullable=True)
     deadline: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     urgency: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -67,6 +77,8 @@ class UserItem(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     item_type: Mapped[str] = mapped_column(String(64), nullable=False)
     item_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    brand: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(80), nullable=True)
     available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     owner: Mapped[User] = relationship(back_populates="items")
 
@@ -78,8 +90,13 @@ class HelpOffer(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     request_id: Mapped[int] = mapped_column(ForeignKey("help_requests.id"), nullable=False)
     helper_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
-    item_id: Mapped[int] = mapped_column(ForeignKey("user_items.id"), nullable=False)
+    item_id: Mapped[int | None] = mapped_column(ForeignKey("user_items.id"), nullable=True)
     message: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    response_type: Mapped[str] = mapped_column(String(32), nullable=False, default="direct")
+    help_note: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    offered_brand: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    offered_model: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    capability_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     sent_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now_naive)
     responded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -88,7 +105,7 @@ class HelpOffer(Base):
     helper_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     request: Mapped[HelpRequest] = relationship(back_populates="offers")
     helper: Mapped[User] = relationship()
-    item: Mapped[UserItem] = relationship()
+    item: Mapped[UserItem | None] = relationship()
 
 
 class AgentEvent(Base):
@@ -102,3 +119,15 @@ class AgentEvent(Base):
     dedupe_key: Mapped[str] = mapped_column(String(120), nullable=False, unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now_naive)
     request: Mapped[HelpRequest] = relationship(back_populates="events")
+
+
+class RequestDismissal(Base):
+    """A Helper's private, reversible choice to hide an open board request."""
+
+    __tablename__ = "request_dismissals"
+    __table_args__ = (UniqueConstraint("request_id", "helper_id", name="uq_request_dismissal_helper"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    request_id: Mapped[int] = mapped_column(ForeignKey("help_requests.id"), nullable=False)
+    helper_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=utc_now_naive)

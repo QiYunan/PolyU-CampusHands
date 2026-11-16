@@ -24,7 +24,7 @@ class FakeProvider(MockLLMProvider):
         self.calls += 1
         if self.errors:
             raise self.errors.pop(0)
-        return ParsedFields(item_type="scientific_calculator")
+        return ParsedFields(category="borrow", need_summary="科学计算器", item_type="scientific_calculator")
 
 
 @pytest.mark.parametrize("code", ["connection_or_timeout", "rate_limited", "server_error", "invalid_output"])
@@ -51,22 +51,22 @@ def test_two_provider_failure_and_no_retry_on_nontransient():
 
 
 def test_allowlisted_native_tool_schema_is_shared():
-    schemas = tool_schemas(["send_help_offer", "wait_for_response"])
-    assert [entry["function"]["name"] for entry in schemas] == ["send_help_offer", "wait_for_response"]
+    schemas = tool_schemas(["publish_request", "wait_for_response"])
+    assert [entry["function"]["name"] for entry in schemas] == ["publish_request", "wait_for_response"]
     assert schemas[0]["function"]["parameters"]["additionalProperties"] is False
 
 
 def test_native_tool_call_and_validated_json_fallback():
     provider = CompatibleProvider("test", "http://localhost:1/v1", "dummy", "local", 1)
     native = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
-        tool_calls=[SimpleNamespace(function=SimpleNamespace(name="send_help_offer", arguments='{"request_id": 7}'))], content=None))])
+        tool_calls=[SimpleNamespace(function=SimpleNamespace(name="publish_request", arguments='{"request_id": 7}'))], content=None))])
     fallback = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
         tool_calls=None, content=json.dumps({"name": "wait_for_response", "arguments": {"request_id": 7}})))])
     provider._complete = AsyncMock(side_effect=[native, fallback])
-    first = asyncio.run(provider.choose({"request_id": 7, "status": "draft"}, ["send_help_offer"]))
+    first = asyncio.run(provider.choose({"request_id": 7, "status": "draft"}, ["publish_request"]))
     second = asyncio.run(provider.choose({"request_id": 7, "status": "awaiting_response"}, ["wait_for_response"]))
-    assert first.name == "send_help_offer" and second.name == "wait_for_response"
-    assert provider._complete.await_args_list[0].kwargs["tools"][0]["function"]["name"] == "send_help_offer"
+    assert first.name == "publish_request" and second.name == "wait_for_response"
+    assert provider._complete.await_args_list[0].kwargs["tools"][0]["function"]["name"] == "publish_request"
     asyncio.run(provider.close())
 
 
@@ -101,7 +101,7 @@ def test_ollama_non_thinking_is_explicit():
 
 def test_ollama_unique_explicit_relative_time_is_revalidated():
     provider = CompatibleProvider("ollama", "http://localhost:1/v1", "ollama", "qwen3.5:4b", 1)
-    response = {"category": "borrow", "item_type": "scientific_calculator", "location": "VA", "deadline_in_minutes": None, "deadline_at": None, "urgency": "high"}
+    response = {"category": "borrow", "need_summary": "科学计算器", "item_type": "scientific_calculator", "location": "VA", "deadline_in_minutes": None, "deadline_at": None, "urgency": "high"}
     provider._complete = AsyncMock(return_value=SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(response)))]))
     parsed = asyncio.run(provider.parse("我20分钟后在VA考试", __import__("datetime").datetime.now(__import__("datetime").timezone.utc), {}))
     assert parsed.deadline_in_minutes == 20
@@ -112,8 +112,38 @@ def test_ollama_unique_explicit_relative_time_is_revalidated():
 @pytest.mark.parametrize("phrase", ["20分钟后或30分钟后", "大概20分钟后", "稍后"])
 def test_ambiguous_time_cannot_be_guessed_by_model(phrase):
     provider = CompatibleProvider("ollama", "http://localhost:1/v1", "ollama", "qwen3.5:4b", 1)
-    response = {"category": "borrow", "item_type": "scientific_calculator", "location": "VA", "deadline_in_minutes": 20, "deadline_at": None, "urgency": "high"}
+    response = {"category": "borrow", "need_summary": "科学计算器", "item_type": "scientific_calculator", "location": "VA", "deadline_in_minutes": 20, "deadline_at": None, "urgency": "high"}
     provider._complete = AsyncMock(return_value=SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(response)))]))
     parsed = asyncio.run(provider.parse(f"我在VA，{phrase}需要", __import__("datetime").datetime.now(__import__("datetime").timezone.utc), {}))
     assert parsed.deadline_in_minutes is None and parsed.deadline_at is None
+    asyncio.run(provider.close())
+
+
+def test_compatible_provider_forces_service_and_grounds_exact_only():
+    provider = CompatibleProvider("ollama", "http://localhost:1/v1", "ollama", "qwen3.5:4b", 1)
+    wrong_service = {
+        "category": "borrow", "need_summary": "科学计算器", "item_type": "scientific_calculator",
+        "preferred_brand": "Casio", "preferred_model": None, "substitution_policy": "exact_only",
+        "location": "Z", "deadline_in_minutes": 20, "deadline_at": None, "urgency": "high",
+    }
+    exact_borrow = {
+        "category": "borrow", "need_summary": "Casio fx-991cnx 科学计算器", "item_type": "scientific_calculator",
+        "preferred_brand": "Casio", "preferred_model": "fx-991cnx", "substitution_policy": "exact_only",
+        "location": "Z", "deadline_in_minutes": 30, "deadline_at": None, "urgency": "normal",
+    }
+    provider._complete = AsyncMock(side_effect=[
+        SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(wrong_service)))]),
+        SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(exact_borrow)))]),
+        SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(exact_borrow)))]),
+    ])
+
+    service = asyncio.run(provider.parse("20分钟后，在Z栋，需要同学帮我搬运实验器材，有偿", __import__("datetime").datetime.now(__import__("datetime").timezone.utc), {}))
+    assert service.category == "service" and service.item_type == "other"
+    assert service.need_summary == "有偿帮忙搬运实验器材"
+    assert service.preferred_brand is None and service.substitution_policy is None
+
+    exact = asyncio.run(provider.parse("30分钟后，在Z栋，只接受 Casio fx-991cnx 计算器", __import__("datetime").datetime.now(__import__("datetime").timezone.utc), {}))
+    assert exact.substitution_policy == "exact_only"
+    ordinary = asyncio.run(provider.parse("30分钟后，在Z栋，需要 Casio fx-991cnx 计算器", __import__("datetime").datetime.now(__import__("datetime").timezone.utc), {}))
+    assert ordinary.substitution_policy is None
     asyncio.run(provider.close())
